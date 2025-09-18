@@ -1,0 +1,31 @@
+# --- Entornos virtuales ---
+.venv/
+venv/
+env/
+
+# --- Archivos de configuración sensibles ---
+.env
+*.env
+
+# --- Archivos de logs ---
+logs/
+*.log
+
+# --- Archivos de datos temporales ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.csv
+*.xlsx
+
+# --- Archivos de sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Carpetas de salida de gráficos ---
+data/plots/
+
+# --- IDEs ---
+.vscode/
+.idea/
