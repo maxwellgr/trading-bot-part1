@@ -114,8 +114,7 @@ Los PNG se guardan en `data/plots/`.
 ## 👤 Autor
 
 **Maxwell González Rivera**  
-GitHub: [https://github.com/maxwellgr](https://github.com/maxwellgr)  
-LinkedIn: *(agrega tu enlace aquí)*  
+GitHub: [https://github.com/maxwellgr](https://github.com/maxwellgr)   
 
 ---
 
