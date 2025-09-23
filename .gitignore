@@ -1,30 +1,34 @@
-# --- Entornos virtuales ---
+# --- Virtual environments ---
 .venv/
 venv/
 env/
 
-# --- Archivos de configuración sensibles ---
+# --- Sensitive config ---
 .env
 *.env
+config/config.yaml
 
-# --- Archivos de logs ---
+# --- Logs ---
 logs/
 *.log
 
-# --- Archivos de datos temporales ---
+# --- Data (trades, backtests, plots, exports) ---
+data/
+!data/README.md   # optional: keep a placeholder file
+
+# --- Python cache ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.csv
-*.xlsx
 
-# --- Archivos de sistema ---
+# --- Temp files ---
+*.tmp
+*.cache
+
+# --- System ---
 .DS_Store
 Thumbs.db
-
-# --- Carpetas de salida de gráficos ---
-data/plots/
 
 # --- IDEs ---
 .vscode/
