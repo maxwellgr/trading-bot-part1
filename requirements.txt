@@ -1,5 +1,5 @@
-pandas==2.2.2
-numpy==1.26.4
-python-dotenv==1.0.1
-requests==2.32.3
-pydantic==2.8.2
+﻿pandas>=2.1
+requests>=2.31
+pydantic>=2.0
+python-dotenv>=1.0
+alpaca-trade-api>=3.2
