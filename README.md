@@ -1,251 +1,202 @@
-﻿# setup_docs.ps1 â€” crea README.md, requirements.txt y .env.example (pega y ejecuta en PowerShell)
+﻿# Trading Bot (Paper) — Stocks/ETFs with *Ensemble*, Risk Management and Profit Protection
 
-# ========= README.md =========
-$readme = @'
-# Trading Bot (Paper) â€” Acciones con Ensemble, Riesgo Avanzado y ProtecciÃ³n de Ganancias
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Status](https://img.shields.io/badge/Status-Actively%20maintained-brightgreen)
+![Broker](https://img.shields.io/badge/Broker-Alpaca%20Paper-black)
 
-Bot de paper-trading multi-sÃ­mbolo para **acciones/ETFs** usando **Alpaca**, con:
-- Estrategias: **MA**, **RSI**, **MACD**, **Bollinger**  
-- **Ensemble** (consensus / weighted / stacked) + filtros de **tendencia** y **volatilidad**  
-- **Risk Manager avanzado** (sizing por riesgo, RR mÃ­nimo, trailing por ATR, lÃ­mites de apalancamiento/liquidez)  
-- **ProtecciÃ³n de ganancias**: break-even por R, **scale-out** por niveles de R, **giveback** por trade y **halt** por objetivo diario  
-
-> âš ï¸ Este bot **opera acciones**. Para **opciones** se usarÃ¡ un bot aparte (`run_options.py`).
+> **Executive Summary**
+> Multi‑symbol *paper trading* bot for **stocks/ETFs** (Alpaca) featuring **technical strategies** (MA, RSI, MACD, Bollinger Bands), **ensemble methods** (consensus / weighted / stacked), **advanced risk manager** (risk‑based sizing, min R\:R, ATR trailing stop, exposure limits) and **profit protection** (break‑even per R, scale‑out, giveback). Modular architecture ready to extend to other brokers via adapters.
 
 ---
 
-## Requisitos
+## ✨ Key Features
 
-- Python 3.10+ (probado con 3.12)
-- Cuenta de Alpaca Paper
+* **Multi‑symbol / multi‑timeframe** (1m, 5m, 15m) with API throttling and liquidity filters.
+* **Plug‑and‑play strategies:** MA crossover, RSI, MACD, Bollinger.
+* **Signal ensemble:** consensus, confidence‑weighted, and stacked (meta‑rule) for robustness.
+* **Risk manager:** position sizing by % of equity or fixed R, min R\:R validation, max drawdown and per‑symbol limits.
+* **Profit protection:** automatic break‑even at R multiples, ATR trailing, partial scale‑outs and configurable giveback.
+* **Safe execution (paper):** slippage control, pre‑order validations and circuit breakers.
+* **Observability:** structured logs, basic backtesting, run reports and CSV export.
+* **Extensible:** interface‑driven design (Strategy, RiskManager, BrokerAdapter).
 
-Instala dependencias (recomendado venv):
+> **Scope**: This repository is focused on **paper trading** for educational and validation purposes. It does not constitute financial advice.
+
+---
+
+## 🧭 How to Use this README Step by Step
+
+We’ll build it section by section so you can copy it into your `README.md` without friction.
+
+* Step 1: Header & summary ✅
+* Step 2: Repo structure & requirements ✅
+* Step 3: Installation & Quickstart ✅
+* Step 4: Configuration (`.env` / `config.yaml`) ✅
+* Step 5: Strategies & Ensemble ✅
+* Step 6: Risk management & profit protection ✅
+* Step 7: Operations (open/close positions & graceful shutdown) ✅
+* Step 8: Logs, reports & troubleshooting ✅
+* Step 9: Contributing & License ✅
+
+---
+
+## 📂 Step 2: Repository Structure & Requirements
+
+### Repo Structure
+
+```
+├── config/             # Configs (.yaml / .env)
+├── core/               # Strategies, risk, adapters
+│   ├── strategies/     # MA, RSI, MACD, Bollinger...
+│   ├── risk/           # Risk manager
+│   ├── adapters/       # BrokerAdapter (Alpaca, others)
+│   └── utils/          # Helpers (logging, indicators...)
+├── data/               # Exported trades / backtests
+├── tests/              # Unit tests
+├── run_paper.py        # Main entry point (Paper trading)
+├── requirements.txt    # Dependencies
+└── README.md
+```
+
+### Requirements
+
+* Python **3.10+**
+* Account at [Alpaca](https://alpaca.markets/) (Paper)
+* Main libraries: `alpaca-trade-api`, `pandas`, `numpy`, `ta`, `pyyaml`, `loguru`
+
+Install dependencies:
+
 ```bash
 pip install -r requirements.txt
-ConfiguraciÃ³n
-Crea un archivo .env en la raÃ­z (ejemplo en .env.example):
+```
 
-ini
-Copiar cÃ³digo
-APCA_BASE_URL=https://paper-api.alpaca.markets
-APCA_API_KEY_ID=PKxxxxxx
-APCA_API_SECRET_KEY=SKxxxxxx
-# Opcional (datos):
-APCA_DATA_URL=https://data.alpaca.markets
-Validar credenciales
-bash
-Copiar cÃ³digo
-python -c "from src.config import settings; print(settings.APCA_BASE_URL, (settings.APCA_API_KEY_ID[:4]+'***') if settings.APCA_API_KEY_ID else None)"
-Estructura (archivos clave)
-graphql
-Copiar cÃ³digo
-src/
-  run_paper.py                 # Runner principal (este README documenta sus flags)
-  risk_manager_avanzado.py     # Risk manager + config/decisiones
-  ensemble.py                  # LÃ³gica de ensemble y wrappers de estrategias
-  broker_alpaca.py             # Cliente sencillo para Alpaca (equities)
-  strategy.py                  # MACrossover, RSI, MACD, Bollinger
-  data.py                      # ConversiÃ³n de barras â†’ DataFrame
-  config.py                    # Carga de .env (pydantic + dotenv)
-  logger.py                    # Config de logging
-Uso rÃ¡pido
-Ver ayuda
-bash
-Copiar cÃ³digo
-python -m src.run_paper -h
-Dry-run (sin conectar a broker)
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols AAPL,MSFT --dry-run
-Operar en horario de mercado (tendencia, conservador)
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols AAPL,MSFT,NVDA \
-  --timeframe 1Min --lookback 150 \
-  --strategy ma --fast 3 --slow 7 \
-  --allow-shorts \
-  --ensemble-mode consensus --ensemble-k 2 \
-  --regime-trend-filter
-â€œModo rangoâ€ (dÃ­a plano â€” recomendado)
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols SPY,QQQ,AAPL,MSFT,NVDA,AMD \
-  --timeframe 15Min --lookback 200 \
-  --strategy ma --fast 5 --slow 20 \
-  --allow-shorts \
-  --ensemble-mode weighted --ensemble-weights "bbands=1,rsi=1,ma=0.3,macd=0.3" \
-  --ensemble-min-score 0.8 \
-  --be-at-r 1.0 --scale-out "1.0:0.5,2.0:0.5" --max-giveback-pct 0.5 \
-  --daily-profit-halt 300 \
-  --poll-seconds 20
-Fuera de horario (usando histÃ³rico)
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols AAPL,MSFT \
-  --hours-back 72 --ignore-clock \
-  --timeframe 1Min --lookback 150 \
-  --strategy ma --fast 3 --slow 7
-Principales flags (resumen)
-Datos & control
+---
 
---symbols A,B,C Â· --timeframe 1Min|5Min|15Min Â· --lookback N
+## ⚡ Step 3: Installation & Quickstart (Paper)
 
---hours-back N (rango histÃ³rico) Â· --ignore-clock (no pausa fuera de horario)
+### 1. Clone the repo
 
---poll-seconds N (intervalo del loop)
+```bash
+git clone https://github.com/your-username/trading-bot-paper.git
+cd trading-bot-paper
+```
 
-Estrategias
+### 2. Create virtual environment (recommended)
 
---strategy ma|rsi|macd|bbands y sus parÃ¡metros (--fast/--slow, --rsi-*, --macd-*, --bb-*)
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Linux/Mac
+.venv\Scripts\activate      # Windows
+```
 
-Flags por estado (MA): --enter-when-above, --enter-short-when-below, --exit-*
+### 3. Install dependencies
 
-Ensemble
+```bash
+pip install -r requirements.txt
+```
 
---ensemble-mode off|consensus|weighted|stacked
+### 4. Configure credentials & parameters
 
---ensemble-k (consensus/stacked)
+* Copy `config/config.example.yaml` → `config/config.yaml`
+* Edit Alpaca (paper) credentials in `.env`
 
---ensemble-weights "ma=1,macd=1,rsi=0.5,bbands=0.5"
+### 5. Run in paper mode
 
---ensemble-min-score (weighted)
+```bash
+python run_paper.py --symbols AAPL,TSLA,NVDA --timeframe 1m
+```
 
-Filtros de rÃ©gimen:
+This will launch the bot in **paper trading** with the chosen symbols and 1‑minute timeframe. Logs appear in console and `data/`.
 
---regime-trend-filter (+ --regime-trend-window)
+---
 
---regime-atr-filter (+ --regime-atr-window y --regime-atr-threshold)
+## 🧩 Step 4: Configuration (`.env` and `config.yaml`)
 
-ProtecciÃ³n de ganancias
+> **Where files go**
+>
+> * **`.env`** at project root (never commit to Git).
+> * **`config/config.yaml`** in `config/`.
 
---be-at-r 1.0 â†’ mueve stop a break-even al alcanzar 1R
+### `.env` — credentials & environment settings
 
---scale-out "1.0:0.5,2.0:0.5" â†’ parciales por niveles R
+Create `.env` with placeholders (replace with your real **Alpaca Paper** keys):
 
---max-giveback-pct 0.5 â†’ si devuelve â‰¥50% del pico de PnL del trade, cierra
+```env
+# Alpaca (Paper)
+ALPACA_API_KEY_ID=YOUR_KEY_ID
+ALPACA_API_SECRET_KEY=YOUR_SECRET
+ALPACA_BASE_URL=https://paper-api.alpaca.markets
 
---daily-profit-halt 300 â†’ pausa nuevas entradas al llegar a +$300 realizado
+# App
+LOG_LEVEL=INFO
+TZ=America/Puerto_Rico
+DATA_DIR=./data
+```
 
-Nota: El giveback diario (pausa si devuelves X% del pico del dÃ­a) es opcional y puede aÃ±adirse con un snippet extra (no activado por defecto).
+### `config.yaml` — bot parameters
 
-CÃ³mo decide el RiskManager
-Sizing por riesgo: arriesga account_risk_pct del equity con stop por ATR (configurable).
+See Spanish version above (all keys apply). Example includes `app`, `risk`, `strategies`, `ensemble`, `execution`, and `logging` sections with adjustable values.
 
-RR mÃ­nimo: rechaza entradas con RR < min_rr.
+---
 
-LÃ­mites: max_positions, max_positions_per_symbol, apalancamiento y liquidez (umbral en USD por barra).
+## 🧠 Step 5: Strategies & Ensemble
 
-Trailing stop por ATR.
+* MA Cross: crossover of fast/slow MAs with trend confirmation.
+* RSI: oversold (<30) → LONG, overbought (>70) → SHORT.
+* MACD: line crossover with histogram acceleration.
+* Bollinger: mean reversion or breakout modes.
 
-Rechazos comunes y soluciÃ³n:
+**Ensemble modes:**
 
-RR < min_rr â†’ sube timeframe o ajusta atr_multiple_* / min_rr.
+* `consensus` (quorum of strategies).
+* `weighted` (sum of weighted confidences).
+* `stacked` (meta‑rule: trend + timing).
 
-Apalancamiento excedido â†’ baja account_risk_pct, sube atr_multiple_sl o usa 15Min.
+---
 
-Liquidez no suficiente â†’ baja min_liquidity_dollar o usa 5â€“15Min.
+## 🛡️ Step 6: Risk Management & Profit Protection
 
-Defaults â€œmodo rangoâ€ en el cÃ³digo:
-account_risk_pct=0.005, min_rr=1.3, atr_multiple_sl=2.0, atr_multiple_tp=3.0, min_liquidity_dollar=200_000.
+* Position sizing by % equity risk (R).
+* Validate min R\:R before entry.
+* Stops by ATR, trailing stops, break‑even shifts.
+* Scale‑outs at R multiples.
+* Giveback % to lock profits.
+* Circuit breakers: daily loss cap, max positions/orders.
 
-Presets Ãºtiles
-Tendencia (conservador)
+---
 
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols AAPL,MSFT,NVDA \
-  --timeframe 1Min --lookback 150 \
-  --strategy ma --fast 3 --slow 7 \
-  --allow-shorts \
-  --ensemble-mode consensus --ensemble-k 2 \
-  --regime-trend-filter
-Rango (mÃ¡s seÃ±ales, filtrado)
+## ⚙️ Step 7: Operations & Graceful Shutdown
 
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols SPY,QQQ,AAPL,MSFT,NVDA,AMD \
-  --timeframe 15Min --lookback 200 \
-  --strategy ma --fast 5 --slow 20 \
-  --allow-shorts \
-  --ensemble-mode weighted --ensemble-weights "bbands=1,rsi=1,ma=0.3,macd=0.3" \
-  --ensemble-min-score 0.8 \
-  --be-at-r 1.0 --scale-out "1.0:0.5,2.0:0.5" --max-giveback-pct 0.5 \
-  --daily-profit-halt 300 \
-  --poll-seconds 20
-Post-evento (volÃ¡til)
+* Orders placed via BrokerAdapter.
+* Monitors in real time, updates stops, applies scale‑outs.
+* Closes on stop, trailing, giveback or shutdown event.
+* `--close-all-on-exit` ensures no open positions remain.
 
-bash
-Copiar cÃ³digo
-python -m src.run_paper --symbols AAPL,MSFT,NVDA,AMD \
-  --timeframe 5Min --lookback 200 \
-  --strategy ma --fast 5 --slow 20 \
-  --allow-shorts \
-  --ensemble-mode consensus --ensemble-k 2 \
-  --regime-trend-filter \
-  --poll-seconds 20
-InterpretaciÃ³n de logs (rÃ¡pido)
-Ensemble: BUY/SELL/HOLD | votes=... score=... â†’ decisiÃ³n combinada.
+---
 
-BUY/SHORT rechazado: RR ... â†’ riesgo/beneficio insuficiente con tus parÃ¡metros.
+## 📊 Step 8: Logs, Reports & Troubleshooting
 
-Apalancamiento excedido â†’ tamaÃ±o demasiado grande para tu lÃ­mite.
+* **Logs:** console + file (`./data/run.log`).
+* **CSV trades:** `./data/trades.csv` with PnL, R multiples.
+* **Session report:** total trades, win rate, avg R, max DD.
+* **Common issues:** invalid API keys, no trades (filters), NaN indicators, Alpaca paper quirks.
+* Debug by setting `LOG_LEVEL=DEBUG`.
 
-ðŸ”§ Trailing stop -> ... â†’ stop actualizÃ¡ndose por ATR.
+---
 
-ðŸ Break-even activado @ â†’ stop movido al precio de entrada.
+## 🤝 Step 9: Contributing & License
 
-âœ‚ï¸ Scale-out ... â†’ toma parcial ejecutada.
+### Contributing
 
-ðŸ›¡ï¸ Cierre por giveback â†’ se devolviÃ³ â‰¥X% del pico de PnL del trade.
+1. Fork the repo.
+2. Create a feature branch (`git checkout -b feature/new-feature`).
+3. Commit with clear messages.
+4. Run tests (`pytest`).
+5. Open a Pull Request.
 
-ðŸ§­ Objetivo diario alcanzado â†’ se pausaron nuevas entradas.
+### License
 
-Roadmap corto
-Bot separado para opciones (run_options.py) con selecciÃ³n por DTE/Î”, sizing por premium y filtros de liquidez (OI/vol/spread).
+Licensed under [MIT License](LICENSE).
 
-Bracket orders nativos en Alpaca (SL/TP en broker).
-
-Persistencia de position_book y CSV de mÃ©tricas por trade.
-
-Licencia
-Uso personal/educativo. Paper-trading; ajusta bajo tu propio riesgo.
-'@
-
-========= requirements.txt =========
-$requirements = @'
-requests>=2.31.0
-pydantic>=2.5.0
-python-dotenv>=1.0.0
-pandas>=2.0.0
-numpy>=1.24.0
-alpaca-trade-api>=3.2.0
-'@
-
-========= .env.example =========
-$envExample = @'
-
-Credenciales Alpaca (Paper)
-APCA_BASE_URL=https://paper-api.alpaca.markets
-APCA_API_KEY_ID=PKxxxxxx
-APCA_API_SECRET_KEY=SKxxxxxx
-
-(Opcional) Endpoint de datos
-APCA_DATA_URL=https://data.alpaca.markets
-'@
-
-Set-Content -Encoding UTF8 -Path README.md -Value $readme
-Set-Content -Encoding UTF8 -Path requirements.txt -Value $requirements
-Set-Content -Encoding UTF8 -Path .env.example -Value $envExample
-
-Write-Host "âœ… Archivos creados: README.md, requirements.txt, .env.example" -ForegroundColor Green
-
-markdown
-Copiar cÃ³digo
-
-Si prefieres que te lo dÃ© como **.bat** o **bash**, me dices y te lo convierto.
-::contentReference[oaicite:0]{index=0}
-
-## Licencia
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-Este proyecto se distribuye bajo la licencia **MIT**. Consulta [LICENSE](LICENSE).
-
+---
