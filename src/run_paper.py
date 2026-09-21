@@ -12,7 +12,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from .logger import logger
 from .broker_alpaca import BrokerAlpaca
 from .data import bars_to_df
-from .strategy import MACrossover, RSIStrategy, MACDStrategy, BollingerStrategy
+from .strategy import MACrossover, RSIStrategy, MACDStrategy, BollingerStrategy, StrategyResult
 
 # === Risk Manager avanzado ===
 from .risk_manager_avanzado import (
@@ -92,6 +92,32 @@ def parse_scale_out(s: str) -> List[Tuple[float, float]]:
             pass
     levels.sort(key=lambda x: x[0])
     return levels
+
+
+def _format_values(values: Dict[str, Any]) -> str:
+    parts = []
+    for k, v in values.items():
+        parts.append(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}")
+    return " ".join(parts)
+
+
+def _print_strategy_detail(name: str, result: StrategyResult) -> None:
+    """Solo se imprime con --explain. No afecta ninguna decisión de trading,
+    únicamente muestra por qué la estrategia dio lo que dio."""
+    tag = "OK" if result.warmup_ok else "WARM-UP"
+    vals = _format_values(result.values)
+    print(f"    · {name:<8} {(result.signal or 'HOLD'):<5} [{tag}] {result.reason}" + (f" | {vals}" if vals else ""))
+
+
+def _print_ensemble_detail(meta_sig: Dict[str, Any]) -> None:
+    """Solo se imprime con --explain. Desglosa el voto de cada estrategia
+    del ensemble: señal, si fue vetada por el filtro de régimen, warm-up, y
+    los valores del indicador que la sustentan."""
+    for name, d in meta_sig["details"].items():
+        tag = "OK" if d["warmup_ok"] else "WARM-UP"
+        gate = " [bloqueado por filtro de régimen]" if d["gated_by_regime"] else ""
+        vals = _format_values(d["values"])
+        print(f"    · {name.upper():<8} {(d['signal'] or 'HOLD'):<5} [{tag}]{gate} {d['reason']}" + (f" | {vals}" if vals else ""))
 
 
 # ---------------- Persistencia del estado de posiciones ----------------
@@ -335,12 +361,22 @@ def trade_one_symbol(
 
     # Señal (ensemble o single)
     if ensemble is None:
-        sig = strat.signal(df)
-        print(f"🧭 [{symbol}] Señal: {sig or 'HOLD'}")
+        result = strat.evaluate(df)  # evaluate()/signal() dan la MISMA señal (ver strategy.py); evaluate() solo suma diagnóstico.
+        sig = result.signal
+        warmup_note = "" if result.warmup_ok else " ⏳(warm-up)"
+        print(f"🧭 [{symbol}] Señal: {sig or 'HOLD'}{warmup_note}")
+        if args.explain:
+            _print_strategy_detail(args.strategy.upper(), result)
     else:
         sig, meta_sig = ensemble.decide(df, wrappers)  # type: ignore[arg-type]
         votes = meta_sig["votes"]; sc = meta_sig["score"]
-        print(f"🧭 [{symbol}] Ensemble: {sig} | votes={votes} score={sc:.2f} | {meta_sig.get('reason','')}")
+        warmup_note = ""
+        if meta_sig.get("any_warmup_pending"):
+            pending = [n.upper() for n, d in meta_sig["details"].items() if not d["warmup_ok"]]
+            warmup_note = f" | ⏳ en warm-up: {','.join(pending)}"
+        print(f"🧭 [{symbol}] Ensemble: {sig} | votes={votes} score={sc:.2f} | {meta_sig.get('reason','')}{warmup_note}")
+        if args.explain:
+            _print_ensemble_detail(meta_sig)
 
     print(f"📈 [{symbol}] Última {timeframe}: close={price:.2f}  (rows={len(df)})")
     if args.debug_ma and ma_fast is not None and ma_slow is not None:
@@ -800,6 +836,10 @@ if __name__ == "__main__":
     p.add_argument("--fast", type=int, default=3, help="MA rápida")
     p.add_argument("--slow", type=int, default=7, help="MA lenta")
     p.add_argument("--debug-ma", action="store_true")
+    p.add_argument("--explain", action="store_true",
+                   help="Imprime, en cada tick, por qué cada estrategia (o el ensemble) dio BUY/SELL/HOLD: "
+                        "razón, valores de indicadores, y si el motivo fue warm-up insuficiente. "
+                        "Solo diagnóstico — no cambia ninguna decisión de trading.")
     # RSI params
     p.add_argument("--rsi-period", type=int, default=14)
     p.add_argument("--rsi-buy", type=float, default=30.0)

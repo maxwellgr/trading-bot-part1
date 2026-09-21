@@ -211,6 +211,29 @@ For transparency (this section will shrink over time as items get addressed):
 
 ---
 
+## 🗺️ Roadmap: target architecture
+
+None of what follows is implemented yet beyond what's described earlier in this README — this section exists so every incremental change can be checked against where the project is headed, instead of guessing.
+
+```
+Market Data → Indicators → Market Regime Detector → Strategy / Adaptive Strategy Selection → Risk Manager → Execution → Analytics
+```
+
+Current work (see [Known limitations](#-known-limitations--recently-fixed-issues) above) is converging on this step by step: structured signal diagnostics (`StrategyResult`, "Phase A") is the first move toward separating a strategy's *decision* from its *explanation*; splitting `indicators.py` out of `strategy.py` ("Phase B") is next.
+
+### Market Regime Detector (future — not implemented)
+
+A new layer between Indicators and Strategy. Its job is to **classify** market context, never to place orders.
+
+Target states: `TRENDING_UP`, `TRENDING_DOWN`, `RANGING`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `BREAKOUT`, and `NO_TRADE`/`UNKNOWN` for when there isn't enough confidence to classify.
+
+* **V1 — rule‑based/statistical** (interpretable, no ML): candidate inputs are ADX, ATR, Bollinger Band width, moving‑average slope, volume, returns, and swing high/low structure.
+* **V2 — ML, only after backtesting is trustworthy and there's enough data**: an ML‑based detector would still only output a regime classification — it would **never** place trades directly by default. The Strategy layer would use that classification to select/weight strategies, e.g. `TRENDING` → favor trend‑following (MA/MACD), `RANGING` → favor mean‑reversion (RSI/Bollinger), `HIGH_VOLATILITY`/`UNKNOWN` → cut risk or go `NO_TRADE`. The ML version only gets adopted if it objectively beats the rule‑based one on out‑of‑sample data — not by default for using ML.
+
+**Implication for Analytics, starting now**: when the structured Trade Logger (Phase C) gets designed, it's worth capturing the regime‑detector's likely inputs (ADX, normalized ATR, Bollinger width, MA slope, relative volume) alongside each trade/evaluation from day one, so the historical dataset for V1/V2 doesn't have to be reconstructed later. This does **not** expand the scope of the phase in progress — it's a note for when Phase C is designed.
+
+---
+
 ## 🤝 Contributing & License
 
 ### Contributing

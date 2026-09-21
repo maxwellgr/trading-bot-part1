@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.strategy import MACrossover, RSIStrategy, MACDStrategy, BollingerStrategy
+from src.strategy import MACrossover, RSIStrategy, MACDStrategy, BollingerStrategy, StrategyResult
 
 
 def _trend_reversal_df(n_flat: int = 20, n_up: int = 60, n_down: int = 60) -> pd.DataFrame:
@@ -107,3 +107,86 @@ def test_missing_close_column_raises():
         MACDStrategy(fast=1, slow=2, signal=1).signal(df)
     with pytest.raises(ValueError):
         BollingerStrategy(window=2).signal(df)
+
+
+# ---------------- Fase A: StrategyResult / evaluate() ----------------
+#
+# Requisito clave: signal() NO debe cambiar de comportamiento. En vez de
+# reimplementar la lógica dos veces, signal() ahora es literalmente
+# `return self.evaluate(df).signal` (ver strategy.py) — estructuralmente no
+# pueden divergir. Estas pruebas lo verifican de todas formas, de forma
+# explícita y en muchos puntos de datos, no solo por construcción del código.
+
+@pytest.mark.parametrize("strategy_factory", [
+    lambda: MACrossover(fast=3, slow=10),
+    lambda: RSIStrategy(period=5),
+    lambda: MACDStrategy(fast=5, slow=13, signal=4),
+    lambda: BollingerStrategy(window=10, k=2.0),
+])
+def test_signal_matches_evaluate_signal_across_all_prefixes(strategy_factory):
+    """Para CADA prefijo de datos (0..N filas), signal(df) == evaluate(df).signal.
+    Esta es la prueba de equivalencia pedida explícitamente: mismos datos,
+    misma decisión que antes del refactor de Fase A."""
+    strategy = strategy_factory()
+    df = _trend_reversal_df()
+    for i in range(0, len(df) + 1):
+        prefix = df.iloc[:i]
+        assert strategy.signal(prefix) == strategy.evaluate(prefix).signal, f"Diverge en prefijo de {i} filas"
+
+
+@pytest.mark.parametrize("strategy_factory, needed_attr", [
+    (lambda: MACrossover(fast=3, slow=10), "slow"),
+    (lambda: RSIStrategy(period=5), "period"),
+    (lambda: MACDStrategy(fast=5, slow=13, signal=4), "slow"),
+    (lambda: BollingerStrategy(window=10, k=2.0), "window"),
+])
+def test_evaluate_marks_warmup_ok_false_when_insufficient_data(strategy_factory, needed_attr):
+    """Con pocas filas, evaluate() debe decir explícitamente que el HOLD es
+    por falta de datos (warmup_ok=False), no por ausencia de condición."""
+    strategy = strategy_factory()
+    result = strategy.evaluate(pd.DataFrame({"close": [100.0]}))
+    assert result.signal is None
+    assert result.warmup_ok is False
+    assert "warm-up" in result.reason.lower() or "nan" in result.reason.lower()
+
+
+def test_evaluate_marks_warmup_ok_true_when_no_cross_but_enough_data():
+    """Con datos suficientes pero sin cruce, el HOLD es 'no ocurrió la
+    condición', no 'faltan datos' — warmup_ok debe ser True."""
+    # Precio perfectamente plano: nunca cruza nada, pero hay de sobra para calcular las medias.
+    df = pd.DataFrame({"close": [100.0] * 30})
+    result = MACrossover(fast=3, slow=10).evaluate(df)
+    assert result.signal is None
+    assert result.warmup_ok is True
+    assert "cruce" in result.reason.lower()
+
+
+def test_evaluate_reports_values_and_reason_on_buy():
+    df = _trend_reversal_df()
+    strat = MACrossover(fast=3, slow=10)
+    for i in range(1, len(df) + 1):
+        result = strat.evaluate(df.iloc[:i])
+        if result.signal == "BUY":
+            assert result.warmup_ok is True
+            assert "ma_fast" in result.values and "ma_slow" in result.values
+            assert "cruce alcista" in result.reason.lower()
+            return
+    pytest.fail("La serie sintética no produjo ningún BUY de MACrossover; revisa el fixture.")
+
+
+def test_rsi_evaluate_reports_rsi_values():
+    df = _trend_reversal_df()
+    strat = RSIStrategy(period=5, buy_level=30, sell_level=70)
+    saw_signal = False
+    for i in range(1, len(df) + 1):
+        result = strat.evaluate(df.iloc[:i])
+        if result.signal is not None:
+            saw_signal = True
+            assert {"rsi_prev", "rsi_curr", "buy_level", "sell_level"} <= result.values.keys()
+    assert saw_signal, "Se esperaba al menos una señal de RSI en la serie sintética."
+
+
+def test_strategy_result_is_a_plain_dataclass_with_defaults():
+    r = StrategyResult(signal="BUY", reason="prueba")
+    assert r.values == {}
+    assert r.warmup_ok is True

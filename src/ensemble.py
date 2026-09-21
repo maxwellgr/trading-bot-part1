@@ -6,11 +6,13 @@ from typing import List, Dict, Tuple, Optional
 import math
 import pandas as pd
 
+from .strategy import StrategyResult
+
 
 @dataclass
 class StrategyWrapper:
     name: str
-    strategy: object   # debe tener .signal(df) -> "BUY"/"SELL"/"EXIT"/None
+    strategy: object   # debe tener .signal(df) -> "BUY"/"SELL"/"EXIT"/None (y opcionalmente .evaluate(df) -> StrategyResult)
     weight: float = 1.0
 
 
@@ -111,6 +113,7 @@ class Ensemble:
         Retorna: (signal, meta)  con meta["signals"], meta["votes"], filtros, etc.
         """
         raw_signals: Dict[str, Optional[str]] = {}
+        details: Dict[str, Dict] = {}
         buys, sells = 0, 0
         score = 0.0
 
@@ -120,15 +123,35 @@ class Ensemble:
 
         # Ejecutar estrategias
         for w in wrappers:
-            sig = w.strategy.signal(df)
-            sig = sig if sig in {"BUY", "SELL"} else None  # ignoramos HOLD/EXIT aquí
-            # aplicar filtros de régimen como gate
+            # evaluate() da diagnóstico (reason/values/warmup_ok); si una
+            # estrategia externa no lo implementa, caemos a signal() sin
+            # diagnóstico en vez de romper — el ensemble sigue funcionando.
+            if hasattr(w.strategy, "evaluate"):
+                result: StrategyResult = w.strategy.evaluate(df)
+            else:
+                result = StrategyResult(w.strategy.signal(df), "sin diagnóstico (la estrategia no implementa evaluate())")
+
+            sig = result.signal if result.signal in {"BUY", "SELL"} else None  # ignoramos HOLD/EXIT aquí
+            # aplicar filtros de régimen como gate — esto NO cambia: es
+            # exactamente la misma lógica de antes, solo que ahora anotamos
+            # si el veto vino del filtro de régimen (para el diagnóstico).
+            gated_by_regime = False
             if sig == "BUY" and (not allow_long or not atr_ok):
+                gated_by_regime = True
                 sig = None
             if sig == "SELL" and (not allow_short or not atr_ok):
+                gated_by_regime = True
                 sig = None
 
             raw_signals[w.name] = sig
+            details[w.name] = {
+                "signal": sig,                    # señal ya post-filtro de régimen (la que cuenta para el score)
+                "raw_signal": result.signal,      # señal cruda de la estrategia, antes del filtro de régimen
+                "reason": result.reason,
+                "values": result.values,
+                "warmup_ok": result.warmup_ok,
+                "gated_by_regime": gated_by_regime,
+            }
             if sig == "BUY":
                 buys += 1
                 score += float(w.weight)
@@ -172,6 +195,8 @@ class Ensemble:
 
         meta = {
             "signals": raw_signals,
+            "details": details,
+            "any_warmup_pending": any(not d["warmup_ok"] for d in details.values()),
             "votes": {"BUY": buys, "SELL": sells},
             "score": score,
             "reason": reason,
