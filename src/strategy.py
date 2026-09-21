@@ -43,8 +43,17 @@ class RSIStrategy:
         return 100 - (100 / (1 + rs))
 
     def signal(self, df: pd.DataFrame) -> str | None:
+        if "close" not in df.columns:
+            raise ValueError("El DataFrame debe contener columna 'close'")
+        # Sin esta guarda, con <2 filas rsi.iloc[-2] lanza IndexError en vez
+        # de simplemente decir "todavía no hay señal" (le pasó al backtester
+        # en la primera barra de cada corrida).
+        if len(df) < self.period + 2:
+            return None
         rsi = self.rsi(df["close"])
         r0, r1 = rsi.iloc[-2], rsi.iloc[-1]
+        if pd.isna(r0) or pd.isna(r1):
+            return None
         # BUY cuando cruza hacia arriba nivel de sobreventa
         if r0 <= self.buy_level and r1 > self.buy_level:
             return "BUY"
@@ -61,12 +70,18 @@ class MACDStrategy:
         self.signal_p = signal
 
     def signal(self, df: pd.DataFrame) -> str | None:
+        if "close" not in df.columns:
+            raise ValueError("El DataFrame debe contener columna 'close'")
+        if len(df) < self.slow + 2:
+            return None
         close = df["close"]
         ema_fast = close.ewm(span=self.fast, adjust=False).mean()
         ema_slow = close.ewm(span=self.slow, adjust=False).mean()
         macd = ema_fast - ema_slow
         sig = macd.ewm(span=self.signal_p, adjust=False).mean()
         hist_prev, hist_curr = (macd - sig).iloc[-2], (macd - sig).iloc[-1]
+        if pd.isna(hist_prev) or pd.isna(hist_curr):
+            return None
         if hist_prev <= 0 and hist_curr > 0:
             return "BUY"
         if hist_prev >= 0 and hist_curr < 0:
@@ -80,6 +95,10 @@ class BollingerStrategy:
         self.k = k
 
     def signal(self, df: pd.DataFrame) -> str | None:
+        if "close" not in df.columns:
+            raise ValueError("El DataFrame debe contener columna 'close'")
+        if len(df) < self.window + 2:
+            return None
         close = df["close"]
         ma = close.rolling(self.window).mean()
         std = close.rolling(self.window).std()
@@ -88,6 +107,8 @@ class BollingerStrategy:
         c0, c1 = close.iloc[-2], close.iloc[-1]
         u0, u1 = upper.iloc[-2], upper.iloc[-1]
         l0, l1 = lower.iloc[-2], lower.iloc[-1]
+        if pd.isna(u0) or pd.isna(u1) or pd.isna(l0) or pd.isna(l1):
+            return None
         # Reversión a la media: si sale de banda inferior → BUY; si sale de superior → SELL
         if c0 <= l0 and c1 > l1:
             return "BUY"

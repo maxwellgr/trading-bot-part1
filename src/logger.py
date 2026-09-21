@@ -2,6 +2,18 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import sys
+
+# En Windows, la consola por defecto (PowerShell/cmd) suele usar cp1252, no
+# UTF-8. Los prints del bot usan emojis (✅⚠️🚨...) para que el operador vea
+# de un vistazo qué pasó; sin este ajuste, el primer print con emoji lanza
+# UnicodeEncodeError y mata el proceso en el acto — el bot ni siquiera
+# arranca. reconfigure() está disponible desde Python 3.7.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Asegura carpeta de logs
 os.makedirs("logs", exist_ok=True)

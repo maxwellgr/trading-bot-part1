@@ -19,6 +19,12 @@ class Ensemble:
     Modos:
       - consensus: k-de-n; compra si >=k BUY y 0 SELL (y viceversa).
       - weighted:  score = sum(w BUY) - sum(w SELL). Entra si |score| >= min_score.
+                   Por defecto NO exige unanimidad: un único voto de baja
+                   ponderación en contra no debe anular un score que ya
+                   superó el umbral (si no, "weighted" se comporta como
+                   "consensus" y el peso de cada estrategia deja de importar).
+                   Pasa require_no_opposition=True para recuperar el
+                   comportamiento estricto (0 votos en contra).
       - stacked:   'primary' debe dar BUY/SELL y >=(k-1) confirmadores alineados.
     Filtros de régimen:
       - trend filter: para largos exige close >= SMA(window), para cortos <=.
@@ -36,12 +42,14 @@ class Ensemble:
         use_atr_filter: bool = False,
         atr_window: int = 14,
         atr_threshold: float = 0.003,  # 0.3% del precio
+        require_no_opposition: bool = False,
     ):
         assert mode in {"consensus", "weighted", "stacked"}
         self.mode = mode
         self.k = max(1, int(k))
         self.min_score = float(min_score)
         self.primary = primary.lower() if primary else None
+        self.require_no_opposition = require_no_opposition
         self.use_trend_filter = use_trend_filter
         self.trend_window = trend_window
         self.use_atr_filter = use_atr_filter
@@ -138,9 +146,11 @@ class Ensemble:
                 final, reason = "SELL", f"{sells}-de-{len(wrappers)} SELL (k={self.k})"
 
         elif self.mode == "weighted":
-            if score >= self.min_score and sells == 0:
+            veto_buy = self.require_no_opposition and sells > 0
+            veto_sell = self.require_no_opposition and buys > 0
+            if score >= self.min_score and not veto_buy:
                 final, reason = "BUY", f"score={score:.2f} ≥ {self.min_score}"
-            elif score <= -self.min_score and buys == 0:
+            elif score <= -self.min_score and not veto_sell:
                 final, reason = "SELL", f"score={score:.2f} ≤ -{self.min_score}"
 
         elif self.mode == "stacked":

@@ -1,8 +1,16 @@
 # src/plot_strategy.py
 import argparse
+import sys
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
+
+# Windows: consola por defecto en cp1252, no UTF-8 (ver src/logger.py para más detalle).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from .broker_alpaca import BrokerAlpaca
 from .data import bars_to_df

@@ -1,4 +1,4 @@
-﻿# Trading Bot (Paper) — Stocks/ETFs with *Ensemble*, Risk Management and Profit Protection
+# Trading Bot (Paper) — Stocks/ETFs with *Ensemble*, Risk Management and Profit Protection
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
@@ -6,197 +6,220 @@
 ![Broker](https://img.shields.io/badge/Broker-Alpaca%20Paper-black)
 
 > **Executive Summary**
-> Multi‑symbol *paper trading* bot for **stocks/ETFs** (Alpaca) featuring **technical strategies** (MA, RSI, MACD, Bollinger Bands), **ensemble methods** (consensus / weighted / stacked), **advanced risk manager** (risk‑based sizing, min R\:R, ATR trailing stop, exposure limits) and **profit protection** (break‑even per R, scale‑out, giveback). Modular architecture ready to extend to other brokers via adapters.
-
----
-
-## ✨ Key Features
-
-* **Multi‑symbol / multi‑timeframe** (1m, 5m, 15m) with API throttling and liquidity filters.
-* **Plug‑and‑play strategies:** MA crossover, RSI, MACD, Bollinger.
-* **Signal ensemble:** consensus, confidence‑weighted, and stacked (meta‑rule) for robustness.
-* **Risk manager:** position sizing by % of equity or fixed R, min R\:R validation, max drawdown and per‑symbol limits.
-* **Profit protection:** automatic break‑even at R multiples, ATR trailing, partial scale‑outs and configurable giveback.
-* **Safe execution (paper):** slippage control, pre‑order validations and circuit breakers.
-* **Observability:** structured logs, basic backtesting, run reports and CSV export.
-* **Extensible:** interface‑driven design (Strategy, RiskManager, BrokerAdapter).
+> Multi‑symbol *paper trading* bot for **stocks/ETFs** (Alpaca) featuring **technical strategies** (MA, RSI, MACD, Bollinger Bands), **ensemble methods** (consensus / weighted / stacked), an **advanced risk manager** (risk‑based sizing, min R\:R, ATR trailing stop, exposure/leverage limits, circuit breakers) and **profit protection** (break‑even per R, scale‑out, giveback). Position state is persisted to disk and reconciled against the broker on every restart, so a crash never leaves an open position unprotected.
 
 > **Scope**: This repository is focused on **paper trading** for educational and validation purposes. It does not constitute financial advice.
 
 ---
 
-## 🧭 How to Use this README Step by Step
+## ✨ Key Features
 
-We’ll build it section by section so you can copy it into your `README.md` without friction.
-
-* Step 1: Header & summary ✅
-* Step 2: Repo structure & requirements ✅
-* Step 3: Installation & Quickstart ✅
-* Step 4: Configuration (`.env` / `config.yaml`) ✅
-* Step 5: Strategies & Ensemble ✅
-* Step 6: Risk management & profit protection ✅
-* Step 7: Operations (open/close positions & graceful shutdown) ✅
-* Step 8: Logs, reports & troubleshooting ✅
-* Step 9: Contributing & License ✅
+* **Multi‑symbol / multi‑timeframe** (1m, 5m, 15m) with configurable poll interval and a liquidity filter (min $ volume) before every entry.
+* **Plug‑and‑play strategies:** MA crossover, RSI, MACD, Bollinger — all share the same `.signal(df) -> "BUY"/"SELL"/None` interface.
+* **Signal ensemble:** consensus (k‑of‑n), confidence‑weighted, and stacked (primary + confirmers), with optional trend/volatility regime filters.
+* **Advanced risk manager** (`risk_manager_avanzado.py`): position sizing by % of equity, min R\:R validation (net of fees/slippage), ATR‑based stop/take‑profit, ATR trailing stop, max positions/leverage/portfolio‑heat/per‑symbol‑exposure limits, and circuit breakers (daily loss limit, consecutive losses) — **all tunable via CLI flags**, no code edits required.
+* **Profit protection:** automatic break‑even at R multiples, partial scale‑outs, configurable giveback, and a daily realized‑profit halt.
+* **Crash‑resilient state:** the local position book (stop/take/entry/trailing/scale‑outs) is saved to `data/state.json` after every tick and reconciled against the broker's real positions on startup — an orphaned position from a bot restart gets a conservative stop instead of running unprotected.
+* **Circuit breakers only block *new* entries** — when a breaker trips, already‑open positions keep getting their trailing stop, break‑even and exit checks (this used to not be the case; see [Known limitations / fixed issues](#-known-limitations--recently-fixed-issues)).
+* **Backtesting:** `backtest.py` runs any of the 4 strategies over a local CSV with fees + slippage (bps), optional shorting, and reports Sharpe/Sortino/Calmar, max drawdown, win rate, profit factor and expectancy.
+* **Tests:** a `pytest` suite covers strategy signals, the ensemble, the risk manager's sizing/guards/trailing logic, the metrics module, the backtester, and the position‑persistence/reconciliation logic.
+* **Observability:** structured logs (`logs/bot.log`, rotating) + console, UTF‑8 stdout so the status emojis don't crash the process on Windows' default `cp1252` console.
 
 ---
 
-## 📂 Step 2: Repository Structure & Requirements
+## 📂 Repository Structure & Requirements
 
-### Repo Structure
+### Repo Structure (as it actually exists)
 
 ```
-├── config/             # Configs (.yaml / .env)
-├── core/               # Strategies, risk, adapters
-│   ├── strategies/     # MA, RSI, MACD, Bollinger...
-│   ├── risk/           # Risk manager
-│   ├── adapters/       # BrokerAdapter (Alpaca, others)
-│   └── utils/          # Helpers (logging, indicators...)
-├── data/               # Exported trades / backtests
-├── tests/              # Unit tests
-├── run_paper.py        # Main entry point (Paper trading)
-├── requirements.txt    # Dependencies
+├── src/
+│   ├── run_paper.py            # Main entry point (paper trading loop)
+│   ├── backtest.py             # CSV backtester (all 4 strategies)
+│   ├── strategy.py             # MACrossover, RSIStrategy, MACDStrategy, BollingerStrategy
+│   ├── ensemble.py             # Ensemble (consensus / weighted / stacked) + regime filters
+│   ├── risk_manager_avanzado.py # Advanced RiskManager (the one actually used) + RiskConfig
+│   ├── broker_base.py          # BrokerBase abstract interface
+│   ├── broker_alpaca.py        # BrokerAlpaca (implements BrokerBase) via Alpaca REST
+│   ├── data.py                 # bars_to_df / load_csv
+│   ├── metrics.py              # Sharpe/Sortino/Calmar/drawdown/win-rate/profit-factor
+│   ├── plot_strategy.py        # Price + MA + signals PNG chart
+│   ├── logger.py               # Rotating file + console logger (UTF-8 safe)
+│   └── config.py               # .env loader (Settings)
+├── tests/                      # pytest suite
+├── data/                       # gitignored: state.json, trades, plots, backtests
+├── logs/                       # gitignored: bot.log
+├── .env / .env.sample          # Alpaca Paper credentials (never commit .env)
+├── requirements.txt            # runtime dependencies
+├── requirements-dev.txt        # + pytest
 └── README.md
 ```
+
+There is **no `config/config.yaml`** — all tunables are CLI flags on `run_paper.py` / `backtest.py` (run with `--help` to see the full list) plus the broker credentials in `.env`.
 
 ### Requirements
 
 * Python **3.10+**
 * Account at [Alpaca](https://alpaca.markets/) (Paper)
-* Main libraries: `alpaca-trade-api`, `pandas`, `numpy`, `ta`, `pyyaml`, `loguru`
+* Runtime libraries: `pandas`, `numpy`, `requests`, `python-dotenv`, `matplotlib` (only needed for `plot_strategy.py`)
 
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt        # runtime only
+pip install -r requirements-dev.txt    # + pytest, for running the test suite
 ```
 
 ---
 
-## ⚡ Step 3: Installation & Quickstart (Paper)
+## ⚡ Installation & Quickstart (Paper)
 
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/your-username/trading-bot-paper.git
-cd trading-bot-paper
-```
-
-### 2. Create virtual environment (recommended)
+### 1. Clone the repo and create a virtual environment
 
 ```bash
+git clone <your-fork-url>
+cd trading-bot-part1
 python -m venv .venv
 source .venv/bin/activate   # Linux/Mac
 .venv\Scripts\activate      # Windows
+pip install -r requirements-dev.txt
 ```
 
-### 3. Install dependencies
+### 2. Configure credentials
+
+Copy `.env.sample` → `.env` and fill in your **Alpaca Paper** keys:
+
+```env
+APCA_BASE_URL=https://paper-api.alpaca.markets
+APCA_DATA_BASE_URL=https://data.alpaca.markets
+APCA_API_KEY_ID=your_key_id
+APCA_API_SECRET_KEY=your_secret
+LOG_LEVEL=INFO
+```
+
+`.env` is already in `.gitignore` — never commit it. If a key is ever exposed, rotate it from the [Alpaca paper dashboard](https://app.alpaca.markets/paper/dashboard/overview); it costs nothing and takes a minute.
+
+### 3. Sanity-check the config
 
 ```bash
-pip install -r requirements.txt
+python -m src.smoke_test
 ```
 
-### 4. Configure credentials & parameters
+### 4. Run the test suite
 
-* Copy `config/config.example.yaml` → `config/config.yaml`
-* Edit Alpaca (paper) credentials in `.env`
+```bash
+python -m pytest
+```
 
 ### 5. Run in paper mode
 
 ```bash
-python run_paper.py --symbols AAPL,TSLA,NVDA --timeframe 1m
+python -m src.run_paper --symbols AAPL,TSLA,NVDA --timeframe 1Min --strategy ma --fast 3 --slow 7
 ```
 
-This will launch the bot in **paper trading** with the chosen symbols and 1‑minute timeframe. Logs appear in console and `data/`.
+Add `--ensemble-mode consensus` (or `weighted`/`stacked`) to combine all 4 strategies instead of using a single one. Logs go to console and `logs/bot.log`; position state persists to `data/state.json`.
 
 ---
 
-## 🧩 Step 4: Configuration (`.env` and `config.yaml`)
+## 🧠 Strategies & Ensemble
 
-> **Where files go**
->
-> * **`.env`** at project root (never commit to Git).
-> * **`config/config.yaml`** in `config/`.
+* **MA Cross**: crossover of fast/slow MAs.
+* **RSI**: crosses back above the oversold level → LONG signal; crosses back below the overbought level → SHORT signal.
+* **MACD**: signal-line crossover.
+* **Bollinger**: mean‑reversion (re‑entry after a close outside a band).
 
-### `.env` — credentials & environment settings
+**Ensemble modes** (`--ensemble-mode`):
 
-Create `.env` with placeholders (replace with your real **Alpaca Paper** keys):
+* `consensus` — needs `k` agreeing votes and zero opposing votes (`--ensemble-k`).
+* `weighted` — `score = Σ(weight · BUY) − Σ(weight · SELL)`; triggers when `|score| ≥ --ensemble-min-score`. By default a single low‑weight dissenting vote does **not** veto the trade (that would defeat the point of weighting); pass `--ensemble-require-no-opposition` to restore the stricter all‑agree behavior.
+* `stacked` — the `primary` strategy (MA) must fire, plus `k-1` of the others confirming.
 
-```env
-# Alpaca (Paper)
-ALPACA_API_KEY_ID=YOUR_KEY_ID
-ALPACA_API_SECRET_KEY=YOUR_SECRET
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+Optional regime gates: `--regime-trend-filter` (only trade with the SMA200 trend) and `--regime-atr-filter` (skip low‑volatility periods).
 
-# App
-LOG_LEVEL=INFO
-TZ=America/Puerto_Rico
-DATA_DIR=./data
+---
+
+## 🛡️ Risk Management & Profit Protection
+
+All of these are CLI flags on `run_paper.py` (run `--help` for the full, current list) — nothing is hardcoded in source anymore:
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `--risk-per-trade` | % of equity risked per trade (fixed‑fractional) | 0.005 |
+| `--min-rr` | Minimum reward\:risk (net of fees/slippage) to accept an entry | 1.3 |
+| `--atr-sl-mult` / `--atr-tp-mult` | ATR multiple for initial stop / take‑profit | 2.0 / 3.0 |
+| `--trailing-atr-mult` | ATR multiple for the trailing stop | 1.5 |
+| `--max-positions` | Max simultaneous open positions | 4 |
+| `--max-portfolio-heat` | Max sum of open per‑position risk / equity | 0.2 |
+| `--max-leverage` | Max gross exposure as a multiple of equity | 1.5 |
+| `--max-symbol-exposure` | Max gross exposure per symbol / equity | 0.1 |
+| `--min-liquidity` | Min average $ volume required to enter | 200,000 |
+| `--daily-loss-limit-pct` | Blocks *new* entries once equity drops this % from the day's start | 0.03 |
+| `--max-consecutive-losses` | Blocks *new* entries after N losing trades in a row | 3 |
+| `--be-at-r` | Moves the stop to break‑even at this R multiple | 1.0 |
+| `--scale-out` | Partial exits as `R:pct,R:pct` | `1.0:0.5,2.0:0.5` |
+| `--max-giveback-pct` | Closes a trade if it gives back this fraction of its peak PnL | 0.5 |
+| `--daily-profit-halt` | Pauses *new* entries after this much realized PnL today (USD) | 300 |
+
+**Important**: the daily‑loss/consecutive‑losses/portfolio‑heat/daily‑profit circuit breakers pause new entries only — they never stop the bot from managing (trailing, break‑even, exit) positions that are already open.
+
+---
+
+## 📈 Backtesting
+
+```bash
+python -m src.backtest --file data/AAPL_1min.csv --strategy macd \
+    --fee 0.5 --slippage-bps 5 --allow-shorts
 ```
 
-### `config.yaml` — bot parameters
+Supports `--strategy {ma,rsi,macd,bbands}` with the same parameters as `run_paper.py`, fixed per‑side commission (`--fee`), slippage in basis points (`--slippage-bps`), and optional short‑selling (`--allow-shorts`). Prints total return, Sharpe, Sortino, Calmar, max drawdown, and per‑trade stats (win rate, profit factor, expectancy). It warns when the sample is too short (<~30 trades or <~0.1 years) for those numbers to be meaningful.
 
-See Spanish version above (all keys apply). Example includes `app`, `risk`, `strategies`, `ensemble`, `execution`, and `logging` sections with adjustable values.
-
----
-
-## 🧠 Step 5: Strategies & Ensemble
-
-* MA Cross: crossover of fast/slow MAs with trend confirmation.
-* RSI: oversold (<30) → LONG, overbought (>70) → SHORT.
-* MACD: line crossover with histogram acceleration.
-* Bollinger: mean reversion or breakout modes.
-
-**Ensemble modes:**
-
-* `consensus` (quorum of strategies).
-* `weighted` (sum of weighted confidences).
-* `stacked` (meta‑rule: trend + timing).
+**Known limitation**: the backtester validates a strategy's *signal logic* with realistic costs — it does **not** run the advanced RiskManager (`risk_manager_avanzado.py`) bar‑by‑bar (no ATR sizing, no R\:R gating, no portfolio‑heat limits). Treat `--risk-per-trade`, `--atr-sl-mult`, etc. as parameters you still need to validate in paper trading, not ones the backtester has pre‑validated for you.
 
 ---
 
-## 🛡️ Step 6: Risk Management & Profit Protection
+## ⚙️ Operations, State & Graceful Shutdown
 
-* Position sizing by % equity risk (R).
-* Validate min R\:R before entry.
-* Stops by ATR, trailing stops, break‑even shifts.
-* Scale‑outs at R multiples.
-* Giveback % to lock profits.
-* Circuit breakers: daily loss cap, max positions/orders.
+* Orders are placed via `BrokerAlpaca` (market orders only — no native bracket orders; stops/trailing/take‑profit/scale‑outs are all managed by the bot's own polling loop, since ATR trailing is dynamic and can't be expressed as a static bracket order).
+* The position book (entry, stop, take‑profit, trailing state, break‑even flag, scale‑out levels already taken) is saved to `data/state.json` after every symbol tick.
+* On startup, `reconcile_positions()` compares that saved state against the broker's real positions: a position the broker has but the bot doesn't know about gets rebuilt with a conservative 2% stop instead of being left unmanaged; a position the bot thinks is open but the broker has already closed is dropped from the local book; quantity mismatches are corrected to the broker's value. The same drift check runs on every tick, not just at startup.
+* `Ctrl+C` stops the loop cleanly (`KeyboardInterrupt` is caught).
 
 ---
 
-## ⚙️ Step 7: Operations & Graceful Shutdown
+## 📊 Logs, Reports & Troubleshooting
 
-* Orders placed via BrokerAdapter.
-* Monitors in real time, updates stops, applies scale‑outs.
-* Closes on stop, trailing, giveback or shutdown event.
-* `--close-all-on-exit` ensures no open positions remain.
-
----
-
-## 📊 Step 8: Logs, Reports & Troubleshooting
-
-* **Logs:** console + file (`./data/run.log`).
-* **CSV trades:** `./data/trades.csv` with PnL, R multiples.
-* **Session report:** total trades, win rate, avg R, max DD.
-* **Common issues:** invalid API keys, no trades (filters), NaN indicators, Alpaca paper quirks.
-* Debug by setting `LOG_LEVEL=DEBUG`.
+* **Logs:** console + rotating file (`logs/bot.log`, 1MB × 5 backups).
+* **State:** `data/state.json` (position book — safe to delete when flat; the bot will just reconcile from the broker on next start).
+* **Common issues:**
+  * Invalid API keys → `RuntimeError: Faltan variables...` from `config.py`.
+  * No trades → check `--min-rr`, `--min-liquidity`, and warm‑up (`--lookback`/`--hours-back`) against your indicator windows.
+  * On Windows, if you see `UnicodeEncodeError` from a *fork* of this repo that removed the UTF‑8 stdout fix in `logger.py`, that's what broke — restore it.
+* Debug by setting `LOG_LEVEL=DEBUG` in `.env`.
 
 ---
 
-## 🤝 Step 9: Contributing & License
+## 🧪 Known limitations / recently fixed issues
+
+For transparency (this section will shrink over time as items get addressed):
+
+* **Fixed:** circuit breakers used to `return` before the position‑management block, silently leaving open positions without trailing/break‑even/exit checks exactly when the bot decided risk was elevated. They now only block new entries.
+* **Fixed:** position state lived only in memory — a restart with an open position meant no stop/trailing until a new signal appeared. Now persisted + reconciled against the broker.
+* **Fixed:** `RSIStrategy`, `MACDStrategy` and `BollingerStrategy` lacked the warm‑up guard `MACrossover` had, and raised `IndexError` on short input (this is exactly what happened extending the backtester to those strategies).
+* **Fixed:** the `weighted` ensemble mode vetoed a trade on any single dissenting vote regardless of weight, which contradicted the point of weighting.
+* **Fixed:** default Windows console encoding (`cp1252`) crashed the bot on its first emoji `print()`.
+* **Not yet integrated:** the backtester doesn't run the advanced RiskManager bar‑by‑bar (see [Backtesting](#-backtesting) above).
+* **Not yet implemented:** per‑tick reconciliation catches quantity drift and externally‑closed positions, but doesn't reconcile partial fills mid‑order (orders are assumed to fill fully at the last seen close price for PnL accounting — fine for paper trading, not accurate enough for real‑money accounting).
+
+---
+
+## 🤝 Contributing & License
 
 ### Contributing
 
 1. Fork the repo.
 2. Create a feature branch (`git checkout -b feature/new-feature`).
-3. Commit with clear messages.
-4. Run tests (`pytest`).
-5. Open a Pull Request.
+3. Run the test suite (`python -m pytest`) — please add tests for new strategy/risk/ensemble logic.
+4. Commit with clear messages and open a Pull Request.
 
 ### License
 
 Licensed under [MIT License](LICENSE).
-
----

@@ -3,8 +3,10 @@
 
 import sys
 import time
+import json
 import argparse
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 
 from .logger import logger
@@ -90,6 +92,146 @@ def parse_scale_out(s: str) -> List[Tuple[float, float]]:
             pass
     levels.sort(key=lambda x: x[0])
     return levels
+
+
+# ---------------- Persistencia del estado de posiciones ----------------
+# Sin esto, si el proceso se reinicia con una posición abierta en el broker,
+# el bot "olvida" su stop/take/trailing y la deja corriendo sin protección
+# hasta que aparezca una señal nueva. Guardamos el position_book en disco
+# después de cada tick y lo reconciliamos contra el broker al arrancar.
+STATE_PATH = Path("data") / "state.json"
+
+
+def save_position_book(position_book: Dict[str, dict]) -> None:
+    try:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        serializable: Dict[str, dict] = {}
+        for sym, meta in position_book.items():
+            m = dict(meta)
+            side = m.get("side")
+            m["side"] = side.value if isinstance(side, Side) else str(side)
+            m["scaled"] = sorted(m.get("scaled", set()))
+            serializable[sym] = m
+        tmp = STATE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+        tmp.replace(STATE_PATH)
+    except Exception as e:
+        logger.warning(f"No se pudo guardar el estado de posiciones en {STATE_PATH}: {e}")
+
+
+def load_position_book() -> Dict[str, dict]:
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"No se pudo leer el estado persistido ({STATE_PATH}): {e}")
+        return {}
+    book: Dict[str, dict] = {}
+    for sym, meta in raw.items():
+        m = dict(meta)
+        m["side"] = Side.LONG if m.get("side") == "LONG" else Side.SHORT
+        m["scaled"] = set(m.get("scaled", []))
+        book[sym] = m
+    return book
+
+
+def reconcile_positions(broker: BrokerAlpaca, position_book: Dict[str, dict], symbols: List[str]) -> None:
+    """
+    Concilia el position_book persistido/local contra la verdad del broker.
+    - Si el broker no tiene posición pero el libro local sí -> se descarta
+      (se cerró externamente o durante el tiempo que el bot estuvo caído).
+    - Si el broker tiene una posición que el libro local desconoce -> se
+      reconstruye con un stop conservador en vez de dejarla sin protección.
+    - Si las cantidades no coinciden -> se ajusta al valor real del broker.
+    """
+    all_syms = set(symbols) | set(position_book.keys())
+    for sym in all_syms:
+        try:
+            broker_qty = broker.get_position_qty(sym)
+        except Exception as e:
+            logger.warning(f"[{sym}] No se pudo verificar la posición real en el broker: {e}")
+            continue
+
+        local = position_book.get(sym)
+
+        if broker_qty == 0 and local is not None:
+            logger.warning(f"[{sym}] Libro local tenía una posición pero el broker reporta 0. Se descarta el registro local.")
+            position_book.pop(sym, None)
+            continue
+
+        if broker_qty != 0 and local is None:
+            side = Side.LONG if broker_qty > 0 else Side.SHORT
+            qty = abs(broker_qty)
+            entry_guess = None
+            try:
+                bars = broker.get_bars(sym, timeframe="1Min", limit=5)
+                if bars:
+                    entry_guess = float(bars[-1].get("c"))
+            except Exception:
+                entry_guess = None
+            if entry_guess is None:
+                try:
+                    acct = broker.get_account()
+                    entry_guess = float(acct.get("last_equity", 0.0)) or 1.0
+                except Exception:
+                    entry_guess = 1.0
+            conservative_sl_pct = 0.02
+            stop_guess = entry_guess * (1 - conservative_sl_pct) if side == Side.LONG else entry_guess * (1 + conservative_sl_pct)
+            position_book[sym] = {
+                "side": side, "qty": qty, "entry": entry_guess,
+                "stop": stop_guess, "take": None,
+                "risk_ps": max(0.01, abs(entry_guess - stop_guess)),
+                "be_done": False, "scaled": set(),
+                "peak_px": entry_guess, "peak_pnl": 0.0,
+            }
+            logger.warning(
+                f"[{sym}] Posición huérfana detectada en el broker (qty={broker_qty}) sin registro local. "
+                f"Reconstruida con stop conservador ({conservative_sl_pct:.0%}) @ {stop_guess:.2f}."
+            )
+            continue
+
+        if broker_qty != 0 and local is not None:
+            local_qty = local.get("qty", 0)
+            if abs(broker_qty) != local_qty:
+                logger.warning(f"[{sym}] Discrepancia de cantidad: broker={broker_qty} vs local={local_qty}. Ajustando al valor del broker.")
+                local["qty"] = abs(broker_qty)
+
+    save_position_book(position_book)
+
+
+def _open_position(
+    broker: BrokerAlpaca,
+    risk: AdvancedRiskManager,
+    symbol: str,
+    side: Side,
+    price: float,
+    bars_dict: Dict[str, list],
+    label: str,
+) -> Optional[dict]:
+    """
+    Evalúa una entrada con el RiskManager y, si se aprueba, coloca la orden
+    de mercado y arma el registro de position_book. Centraliza lo que antes
+    estaba duplicado (con pequeñas variaciones) en 4 lugares de este archivo.
+    Devuelve el meta a guardar en position_book, o None si se rechazó.
+    """
+    decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
+    if not (decision.allow and decision.qty > 0):
+        print(f"⛔ [{symbol}] {label} rechazado: {decision.reason}")
+        return None
+
+    broker.cancel_open_orders(symbol)
+    market_side = "buy" if side == Side.LONG else "sell"
+    order = broker.place_order_market(symbol, market_side, decision.qty)
+    risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
+    meta = {
+        "side": side, "qty": decision.qty, "entry": decision.entry or price,
+        "stop": decision.stop, "take": decision.take_profit,
+        "risk_ps": risk_ps, "be_done": False, "scaled": set(),
+        "peak_px": decision.entry or price, "peak_pnl": 0.0,
+    }
+    print(f"✅ {label} [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
+    return meta
 
 
 # ---------------- Adapter para el RiskManager ----------------
@@ -204,17 +346,31 @@ def trade_one_symbol(
     if args.debug_ma and ma_fast is not None and ma_slow is not None:
         print(f"🧮 [{symbol}] MA_fast({args.fast})={ma_fast:.4f} | MA_slow({args.slow})={ma_slow:.4f}")
 
-    # Circuit breakers (pérdida diaria / racha / calor de portafolio)
-    halt, why = risk.should_halt_trading()
-    if halt:
-        logger.warning(f"[{symbol}] Trading pausado: {why}")
-        print(f"🚨 [{symbol}] Trading pausado: {why}")
-        time.sleep(1)
-        return
+    # NOTA: los circuit breakers (should_halt_trading) se evalúan MÁS ABAJO,
+    # justo antes de abrir posiciones nuevas — nunca aquí arriba. Si se
+    # evaluaran en este punto, un `return` temprano dejaría posiciones YA
+    # ABIERTAS sin trailing stop, sin break-even y sin chequeo de stop/take
+    # exactamente cuando el sistema decidió que el riesgo es alto. Un
+    # circuit breaker debe bloquear ENTRADAS nuevas, no la gestión de lo
+    # que ya está expuesto.
 
     # Estado de posición local
     pos_qty = broker.get_position_qty(symbol)  # positivo=long, negativo=short, 0=flat
     has_pos = symbol in position_book
+
+    # Guarda contra drift: si el libro local cree tener posición pero el
+    # broker ya no la tiene (cerrada externamente, o por cualquier motivo
+    # fuera del bot), no sigas gestionando un fantasma — descarta el
+    # registro para no tomar decisiones de riesgo sobre datos falsos.
+    if has_pos and pos_qty == 0:
+        logger.warning(f"[{symbol}] position_book decía posición abierta pero el broker reporta 0. Descartando registro local.")
+        position_book.pop(symbol, None)
+        has_pos = False
+    elif has_pos:
+        expected_qty = position_book[symbol].get("qty", 0)
+        if abs(pos_qty) != expected_qty:
+            logger.warning(f"[{symbol}] Drift de cantidad detectado (broker={pos_qty}, local={expected_qty}). Ajustando al valor del broker.")
+            position_book[symbol]["qty"] = abs(pos_qty)
 
     # ---------- Gestión de posiciones abiertas: trailing + protecciones ----------
     if has_pos:
@@ -322,29 +478,28 @@ def trade_one_symbol(
                 print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
             return
 
+    # ---------- Circuit breakers: bloquean SOLO la apertura de posiciones nuevas ----------
+    # Se evalúan aquí (después de gestionar/cerrar lo que ya estaba abierto arriba)
+    # para que una pérdida diaria, racha negativa o calor de portafolio excesivo
+    # detenga nuevas entradas sin dejar huérfanas las posiciones existentes.
+    halt, why = risk.should_halt_trading()
+    if halt:
+        logger.warning(f"[{symbol}] Nuevas entradas pausadas: {why}")
+        print(f"🚨 [{symbol}] Nuevas entradas pausadas: {why}")
+        time.sleep(1)
+        return
+
     # ---------- Flags por estado (MA) ----------
     if args.enter_when_above and pos_qty == 0 and ma_fast is not None and ma_slow is not None and ma_fast > ma_slow:
-        side = Side.LONG
         bars_dict = {
             "close": df["close"].tolist(),
             "high": df["high"].tolist(),
             "low": df["low"].tolist(),
             "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
         }
-        decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
-        if decision.allow and decision.qty > 0:
-            broker.cancel_open_orders(symbol)
-            order = broker.place_order_market(symbol, "buy", decision.qty)
-            risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
-            position_book[symbol] = {
-                "side": side, "qty": decision.qty, "entry": decision.entry or price,
-                "stop": decision.stop, "take": decision.take_profit,
-                "risk_ps": risk_ps, "be_done": False, "scaled": set(),
-                "peak_px": decision.entry or price, "peak_pnl": 0.0
-            }
-            print(f"✅ (state) BUY [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
-        else:
-            print(f"⛔ [{symbol}] (state) BUY rechazado: {decision.reason}")
+        meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="(state) BUY")
+        if meta:
+            position_book[symbol] = meta
         return
 
     if args.exit_when_below and pos_qty > 0 and ma_fast is not None and ma_slow is not None and ma_fast < ma_slow:
@@ -365,27 +520,15 @@ def trade_one_symbol(
         if not broker.get_asset_shortable(symbol):
             print(f"🚫 [{symbol}] No shortable. Omito apertura de corto.")
         else:
-            side = Side.SHORT
             bars_dict = {
                 "close": df["close"].tolist(),
                 "high": df["high"].tolist(),
                 "low": df["low"].tolist(),
                 "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
             }
-            decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
-            if decision.allow and decision.qty > 0:
-                broker.cancel_open_orders(symbol)
-                order = broker.place_order_market(symbol, "sell", decision.qty)
-                risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
-                position_book[symbol] = {
-                    "side": side, "qty": decision.qty, "entry": decision.entry or price,
-                    "stop": decision.stop, "take": decision.take_profit,
-                    "risk_ps": risk_ps, "be_done": False, "scaled": set(),
-                    "peak_px": decision.entry or price, "peak_pnl": 0.0
-                }
-                print(f"✅ (state) SHORT [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
-            else:
-                print(f"⛔ [{symbol}] (state) SHORT rechazado: {decision.reason}")
+            meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="(state) SHORT")
+            if meta:
+                position_book[symbol] = meta
         return
 
     if args.allow_shorts and args.exit_short_when_above and pos_qty < 0 and ma_fast is not None and ma_slow is not None and ma_fast > ma_slow:
@@ -410,27 +553,15 @@ def trade_one_symbol(
                 logger.info(msg)
                 print(f"ℹ️  {msg}")
             else:
-                side = Side.LONG
                 bars_dict = {
                     "close": df["close"].tolist(),
                     "high": df["high"].tolist(),
                     "low": df["low"].tolist(),
                     "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                 }
-                decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
-                if decision.allow and decision.qty > 0:
-                    broker.cancel_open_orders(symbol)
-                    order = broker.place_order_market(symbol, "buy", decision.qty)
-                    risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
-                    position_book[symbol] = {
-                        "side": side, "qty": decision.qty, "entry": decision.entry or price,
-                        "stop": decision.stop, "take": decision.take_profit,
-                        "risk_ps": risk_ps, "be_done": False, "scaled": set(),
-                        "peak_px": decision.entry or price, "peak_pnl": 0.0
-                    }
-                    print(f"✅ BUY [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
-                else:
-                    print(f"⛔ [{symbol}] BUY rechazado: {decision.reason}")
+                meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="BUY")
+                if meta:
+                    position_book[symbol] = meta
         else:
             # BUY para cerrar short existente
             qty = abs(pos_qty)
@@ -456,27 +587,15 @@ def trade_one_symbol(
                     if not broker.get_asset_shortable(symbol):
                         print(f"🚫 [{symbol}] No shortable. Ignoro apertura de corto.")
                     else:
-                        side = Side.SHORT
                         bars_dict = {
                             "close": df["close"].tolist(),
                             "high": df["high"].tolist(),
                             "low": df["low"].tolist(),
                             "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                         }
-                        decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
-                        if decision.allow and decision.qty > 0:
-                            broker.cancel_open_orders(symbol)
-                            order = broker.place_order_market(symbol, "sell", decision.qty)
-                            risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
-                            position_book[symbol] = {
-                                "side": side, "qty": decision.qty, "entry": decision.entry or price,
-                                "stop": decision.stop, "take": decision.take_profit,
-                                "risk_ps": risk_ps, "be_done": False, "scaled": set(),
-                                "peak_px": decision.entry or price, "peak_pnl": 0.0
-                            }
-                            print(f"✅ SHORT [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
-                        else:
-                            print(f"⛔ [{symbol}] SHORT rechazado: {decision.reason}")
+                        meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="SHORT")
+                        if meta:
+                            position_book[symbol] = meta
                 else:
                     msg = f"[{symbol}] Señal SELL pero shorts deshabilitados."
                     logger.info(msg)
@@ -533,23 +652,34 @@ def main(args: argparse.Namespace) -> None:
     acct = broker.get_account()
     equity = float(acct.get("equity", 10_000))
 
-    # Libro local de posiciones con meta (entry/stop/tp) para OCO y trailing
-    position_book: Dict[str, dict] = {}
+    # Libro local de posiciones con meta (entry/stop/tp) para OCO y trailing.
+    # Se carga desde disco (data/state.json) y se concilia contra el broker
+    # para no perder la protección de posiciones abiertas si el proceso
+    # se reinició (ver save_position_book / reconcile_positions).
+    position_book: Dict[str, dict] = load_position_book()
+    reconcile_positions(broker, position_book, symbols)
 
-    # Config de riesgo avanzada (ajústala a tu gusto)
+    # Config de riesgo avanzada (todos los parámetros son ajustables por CLI,
+    # ver --help; los valores por defecto reproducen los que antes estaban
+    # hardcodeados aquí).
     cfg = RiskConfig(
-        account_risk_pct=0.005,     # 0.5% por trade (más conservador)
-        max_positions=4,
+        account_risk_pct=args.risk_per_trade,
+        max_positions=args.max_positions,
         max_positions_per_symbol=1,
-        min_rr=1.3,                 # más permisivo en rango; súbelo a 2.0 para tendencia
+        max_portfolio_heat_pct=args.max_portfolio_heat,
+        max_leverage=args.max_leverage,
+        daily_loss_limit_pct=args.daily_loss_limit_pct,
+        max_consecutive_losses=args.max_consecutive_losses,
+        min_rr=args.min_rr,                 # más permisivo en rango; súbelo a 2.0 para tendencia
         use_atr_based_stop=True,
         atr_window=14,
-        atr_multiple_sl=2.0,        # stop más ancho reduce tamaño y apalancamiento
-        atr_multiple_tp=3.0,        # TP proporcional (RR ~1.5–2)
-        trailing_atr_multiple=1.5,
+        atr_multiple_sl=args.atr_sl_mult,   # stop más ancho reduce tamaño y apalancamiento
+        atr_multiple_tp=args.atr_tp_mult,   # TP proporcional (RR ~1.5–2)
+        trailing_atr_multiple=args.trailing_atr_mult,
         price_precision=2,
         slippage_pct=0.0005,
-        min_liquidity_dollar=200_000,
+        min_liquidity_dollar=args.min_liquidity,
+        max_symbol_exposure_pct=args.max_symbol_exposure,
     )
 
     risk = AdvancedRiskManager(cfg, AlpacaRiskAdapter(broker, position_book))
@@ -585,6 +715,7 @@ def main(args: argparse.Namespace) -> None:
             use_atr_filter=args.regime_atr_filter,
             atr_window=args.regime_atr_window,
             atr_threshold=args.regime_atr_threshold,
+            require_no_opposition=args.ensemble_require_no_opposition,
         )
 
     # Protección de ganancias: parseo de scale-out y sesión
@@ -633,6 +764,11 @@ def main(args: argparse.Namespace) -> None:
                 except Exception as e_sym:
                     logger.exception(f"Error procesando [{sym}]: {e_sym}")
                     print(f"❌ Error en símbolo [{sym}]: {e_sym}")
+                finally:
+                    # Persistimos el estado tras cada símbolo: si el proceso
+                    # muere entre ticks, el próximo arranque reconcilia desde
+                    # el último estado conocido en vez de partir en blanco.
+                    save_position_book(position_book)
 
             time.sleep(args.poll_seconds)
 
@@ -691,12 +827,35 @@ if __name__ == "__main__":
                    help="Pesos para modo weighted (ej: ma=1,macd=1,rsi=0.5,bbands=0.5)")
     p.add_argument("--ensemble-min-score", type=float, default=1.0,
                    help="Umbral de score para modo weighted")
+    p.add_argument("--ensemble-require-no-opposition", action="store_true",
+                   help="En modo weighted, además del umbral de score exige 0 votos en contra "
+                        "(comportamiento estricto anterior; por defecto el score manda, como indica su nombre).")
     # Filtros de régimen
     p.add_argument("--regime-trend-filter", action="store_true", help="Activa filtro de tendencia (SMA)")
     p.add_argument("--regime-trend-window", type=int, default=200, help="Ventana SMA para filtro de tendencia")
     p.add_argument("--regime-atr-filter", action="store_true", help="Activa filtro de volatilidad (ATR/Precio)")
     p.add_argument("--regime-atr-window", type=int, default=14, help="Ventana ATR")
     p.add_argument("--regime-atr-threshold", type=float, default=0.003, help="Umbral ATR/Precio (ej. 0.003 ≈ 0.3%%)")
+    # === RiskManager avanzado (antes hardcodeado en el código; ahora ajustable) ===
+    p.add_argument("--risk-per-trade", type=float, default=0.005,
+                   help="Fracción de equity arriesgada por trade (Fixed Fractional). Default 0.005 = 0.5%%.")
+    p.add_argument("--max-positions", type=int, default=4, help="Máximo de posiciones simultáneas.")
+    p.add_argument("--min-rr", type=float, default=1.3,
+                   help="Riesgo/beneficio mínimo para aceptar una entrada. Súbelo (ej. 2.0) para mercados en tendencia.")
+    p.add_argument("--atr-sl-mult", type=float, default=2.0, help="Múltiplo de ATR para el stop-loss inicial.")
+    p.add_argument("--atr-tp-mult", type=float, default=3.0, help="Múltiplo de ATR para el take-profit inicial.")
+    p.add_argument("--trailing-atr-mult", type=float, default=1.5, help="Múltiplo de ATR para el trailing stop.")
+    p.add_argument("--min-liquidity", type=float, default=200_000.0,
+                   help="Volumen $ promedio mínimo (ventana liq_window) para aceptar una entrada.")
+    p.add_argument("--max-portfolio-heat", type=float, default=0.2,
+                   help="Suma de riesgos abiertos / equity antes de bloquear nuevas entradas.")
+    p.add_argument("--max-leverage", type=float, default=1.5, help="Exposición bruta máxima como múltiplo de equity.")
+    p.add_argument("--max-symbol-exposure", type=float, default=0.1,
+                   help="Exposición bruta máxima por símbolo / equity.")
+    p.add_argument("--daily-loss-limit-pct", type=float, default=0.03,
+                   help="Detiene NUEVAS entradas si equity cae esta fracción respecto al inicio del día.")
+    p.add_argument("--max-consecutive-losses", type=int, default=3,
+                   help="Detiene NUEVAS entradas tras N pérdidas seguidas.")
     # === Protecciones de ganancias ===
     p.add_argument("--be-at-r", type=float, default=1.0,
                    help="Mueve el stop a break-even al alcanzar este múltiplo R.")

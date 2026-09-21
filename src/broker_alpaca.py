@@ -2,6 +2,7 @@
 import requests
 from typing import Dict, Any, List
 from .config import settings
+from .broker_base import BrokerBase
 
 
 def _headers() -> Dict[str, str]:
@@ -11,7 +12,7 @@ def _headers() -> Dict[str, str]:
     }
 
 
-class BrokerAlpaca:
+class BrokerAlpaca(BrokerBase):
     def __init__(self):
         self.base = settings.alpaca_base_url
         self.data_base = settings.alpaca_data_url
@@ -93,23 +94,23 @@ class BrokerAlpaca:
         r.raise_for_status()
         return r.json()
 
-    def place_order_bracket(self, symbol: str, side: str, qty: int, take_profit_pct: float, stop_loss_pct: float, tif: str = "gtc") -> dict:
-        """
-        Envía una orden 'bracket' (TP/SL).
-        Para BUY: TP arriba (take_profit_pct>0), SL abajo (stop_loss_pct>0).
-        """
-        # Precios relativos se calculan por Alpaca a partir del fill. Aquí usamos offsets en porcentaje.
-        payload = {
-            "symbol": symbol,
-            "side": side,
-            "type": "market",
-            "time_in_force": tif,
-            "qty": str(qty),
-            "order_class": "bracket",
-            "take_profit": {"limit_price": None, "limit_price_offset": f"{take_profit_pct}%"},  # offset en %
-            "stop_loss": {"stop_price": None, "stop_price_offset": f"{stop_loss_pct}%"},
-        }
-        r = requests.post(f"{self.base}/v2/orders", headers=_headers(), json=payload, timeout=15)
+    # NOTA: se eliminó place_order_bracket() — nunca se usaba (el bot gestiona
+    # stop/trailing/take-profit por software vía risk_manager_avanzado.py y
+    # el polling en run_paper.py, porque el trailing ATR es dinámico y no se
+    # puede expresar como una orden bracket estática). La versión anterior
+    # además estaba rota: la API de brackets de Alpaca espera limit_price /
+    # stop_price absolutos, no offsets porcentuales como se pasaban aquí.
+
+    # ---------- Implementación de BrokerBase ----------
+    def get_positions(self) -> List[Dict[str, Any]]:
+        """Lista de posiciones abiertas tal cual las reporta Alpaca."""
+        r = requests.get(f"{self.base}/v2/positions", headers=_headers(), timeout=15)
         r.raise_for_status()
         return r.json()
+
+    def place_order(self, symbol: str, side: str, qty: int, order_type: str = "market") -> Dict[str, Any]:
+        """Implementación genérica de BrokerBase; delega en place_order_market (única soportada hoy)."""
+        if order_type != "market":
+            raise NotImplementedError(f"order_type={order_type!r} no soportado; usa place_order_market().")
+        return self.place_order_market(symbol, side, qty)
 
