@@ -25,6 +25,9 @@ from .risk_manager_avanzado import (
 # === Ensemble de estrategias ===
 from .ensemble import Ensemble, StrategyWrapper
 
+# === Diagnóstico estructurado (Fase B — observability only) ===
+from .structured_logger import SessionLogger
+
 
 # ---------------- Utilidades ----------------
 def parse_symbols(single: str, plural: str) -> List[str]:
@@ -234,21 +237,46 @@ def _open_position(
     price: float,
     bars_dict: Dict[str, list],
     label: str,
+    session_logger: Optional[SessionLogger] = None,
+    signal: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Evalúa una entrada con el RiskManager y, si se aprueba, coloca la orden
     de mercado y arma el registro de position_book. Centraliza lo que antes
     estaba duplicado (con pequeñas variaciones) en 4 lugares de este archivo.
     Devuelve el meta a guardar en position_book, o None si se rechazó.
+
+    session_logger es puramente observacional: registra la misma decisión
+    que ya se imprime por consola, no participa en ella.
     """
     decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
+
+    if session_logger is not None:
+        session_logger.risk_evaluation(
+            symbol=symbol,
+            side=side.value,
+            signal=signal,
+            decision="ACCEPT" if (decision.allow and decision.qty > 0) else "REJECT",
+            reason=decision.reason,
+            entry_price=decision.entry,
+            stop_price=decision.stop,
+            take_profit=decision.take_profit,
+            position_size=decision.qty if decision.allow else None,
+            atr=decision.meta.get("atr") if decision.meta else None,
+            extra={"risk_reward_meta": decision.meta.get("rr") if decision.meta else None},
+        )
+
     if not (decision.allow and decision.qty > 0):
         print(f"⛔ [{symbol}] {label} rechazado: {decision.reason}")
         return None
 
     broker.cancel_open_orders(symbol)
     market_side = "buy" if side == Side.LONG else "sell"
+    if session_logger is not None:
+        session_logger.order_submission(symbol=symbol, side=market_side, requested_qty=decision.qty)
     order = broker.place_order_market(symbol, market_side, decision.qty)
+    if session_logger is not None:
+        session_logger.order_result(symbol=symbol, order=order)
     risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
     meta = {
         "side": side, "qty": decision.qty, "entry": decision.entry or price,
@@ -314,6 +342,7 @@ def trade_one_symbol(
     wrappers: Optional[List[StrategyWrapper]],
     scale_out_levels: List[Tuple[float, float]],
     session: Dict[str, Any],
+    session_logger: Optional[SessionLogger] = None,
 ) -> None:
     # Verificamos si es operable
     if not broker.get_asset_tradable(symbol):
@@ -352,6 +381,7 @@ def trade_one_symbol(
 
     last = df.iloc[-1]
     price = float(last["close"])
+    bar_ts = df.index[-1].isoformat() if len(df.index) else None
 
     # MAs opcionales para flags por estado
     ma_fast = ma_slow = None
@@ -367,6 +397,13 @@ def trade_one_symbol(
         print(f"🧭 [{symbol}] Señal: {sig or 'HOLD'}{warmup_note}")
         if args.explain:
             _print_strategy_detail(args.strategy.upper(), result)
+        if session_logger is not None:
+            session_logger.strategy_evaluation(
+                symbol=symbol, timeframe=timeframe, bar_timestamp=bar_ts, bar_close=price,
+                strategy=args.strategy, signal=result.signal, raw_signal=result.signal,
+                reason=result.reason, warmup_ok=result.warmup_ok, gated_by_regime=False,
+                indicator_values=result.values,
+            )
     else:
         sig, meta_sig = ensemble.decide(df, wrappers)  # type: ignore[arg-type]
         votes = meta_sig["votes"]; sc = meta_sig["score"]
@@ -377,6 +414,20 @@ def trade_one_symbol(
         print(f"🧭 [{symbol}] Ensemble: {sig} | votes={votes} score={sc:.2f} | {meta_sig.get('reason','')}{warmup_note}")
         if args.explain:
             _print_ensemble_detail(meta_sig)
+        if session_logger is not None:
+            for name, d in meta_sig["details"].items():
+                session_logger.strategy_evaluation(
+                    symbol=symbol, timeframe=timeframe, bar_timestamp=bar_ts, bar_close=price,
+                    strategy=name, signal=d["signal"], raw_signal=d["raw_signal"],
+                    reason=d["reason"], warmup_ok=d["warmup_ok"], gated_by_regime=d["gated_by_regime"],
+                    indicator_values=d["values"],
+                )
+            session_logger.ensemble_decision(
+                symbol=symbol, timeframe=timeframe, bar_timestamp=bar_ts, bar_close=price,
+                ensemble_mode=ensemble.mode, signal=sig, votes=votes, score=sc,
+                threshold=ensemble.min_score, reason=meta_sig.get("reason", ""),
+                any_warmup_pending=meta_sig.get("any_warmup_pending", False),
+            )
 
     print(f"📈 [{symbol}] Última {timeframe}: close={price:.2f}  (rows={len(df)})")
     if args.debug_ma and ma_fast is not None and ma_slow is not None:
@@ -428,6 +479,10 @@ def trade_one_symbol(
         if stop is None or (side == Side.LONG and new_stop > stop) or (side == Side.SHORT and new_stop < stop):
             meta["stop"] = new_stop
             print(f"🔧 [{symbol}] Trailing stop -> {new_stop:.2f}")
+            if session_logger is not None:
+                session_logger.position_management(symbol, "trailing_stop_update", {
+                    "bar_timestamp": bar_ts, "previous_stop": stop, "new_stop": new_stop, "price": price,
+                })
 
         # ---------- Protección de ganancias ----------
         risk_ps = meta.get("risk_ps", max(0.01, 0.01 * price))  # riesgo por acción
@@ -454,6 +509,10 @@ def trade_one_symbol(
             meta["stop"] = entry_px
             meta["be_done"] = True
             print(f"🏁 [{symbol}] Break-even activado @ {entry_px:.2f} (R={R_now:.2f})")
+            if session_logger is not None:
+                session_logger.position_management(symbol, "break_even", {
+                    "bar_timestamp": bar_ts, "entry_price": entry_px, "r_multiple": R_now,
+                })
 
         # 4.2 Tomas parciales por niveles R (scale-out)
         for R_level, pct in scale_out_levels:
@@ -461,12 +520,18 @@ def trade_one_symbol(
             if R_now >= R_level and key not in meta.get("scaled", set()) and qty > 1:
                 close_qty = max(1, int(qty * pct))
                 if side == Side.LONG:
-                    broker.place_order_market(symbol, "sell", close_qty)
+                    scale_order = broker.place_order_market(symbol, "sell", close_qty)
                 else:
-                    broker.place_order_market(symbol, "buy", close_qty)
+                    scale_order = broker.place_order_market(symbol, "buy", close_qty)
                 meta.setdefault("scaled", set()).add(key)
                 meta["qty"] = qty - close_qty
                 print(f"✂️  [{symbol}] Scale-out {pct*100:.0f}% @ R={R_level:.1f} → qty={meta['qty']}")
+                if session_logger is not None:
+                    session_logger.position_management(symbol, "scale_out", {
+                        "bar_timestamp": bar_ts, "r_level": R_level, "pct": pct,
+                        "closed_qty": close_qty, "remaining_qty": meta["qty"],
+                    })
+                    session_logger.order_result(symbol=symbol, order=scale_order)
                 qty = meta["qty"]
                 if qty <= 0:
                     break
@@ -483,6 +548,12 @@ def trade_one_symbol(
                 risk.record_close(symbol, side, qty, entry_px, meta.get("stop", 0.0), take, pnl)
                 position_book.pop(symbol, None)
                 print(f"🛡️  [{symbol}] Cierre por giveback (devuelto ≥ {args.max_giveback_pct:.0%}) | pnl={pnl:.2f} | id={order.get('id','sin_id')}")
+                if session_logger is not None:
+                    session_logger.position_management(symbol, "giveback_close", {
+                        "bar_timestamp": bar_ts, "pnl": pnl, "peak_pnl": meta.get("peak_pnl", 0.0),
+                        "max_giveback_pct": args.max_giveback_pct, "qty": qty,
+                    })
+                    session_logger.order_result(symbol=symbol, order=order)
                 # objetivo diario
                 session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
                 if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
@@ -507,6 +578,12 @@ def trade_one_symbol(
             risk.record_close(symbol, side, close_qty, entry_px, meta.get("stop", 0.0), take, pnl)
             position_book.pop(symbol, None)
             print(f"✅ [{symbol}] Cierre -> qty={close_qty} pnl={pnl:.2f} | id={order.get('id','sin_id')}")
+            if session_logger is not None:
+                exit_kind = "stop_hit" if hit_stop else ("take_profit_hit" if hit_take else "signal_exit")
+                session_logger.position_management(symbol, "exit", {
+                    "bar_timestamp": bar_ts, "exit_kind": exit_kind, "pnl": pnl, "qty": close_qty,
+                })
+                session_logger.order_result(symbol=symbol, order=order)
             # objetivo diario
             session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
             if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
@@ -533,7 +610,8 @@ def trade_one_symbol(
             "low": df["low"].tolist(),
             "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
         }
-        meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="(state) BUY")
+        meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="(state) BUY",
+                               session_logger=session_logger, signal="BUY")
         if meta:
             position_book[symbol] = meta
         return
@@ -562,7 +640,8 @@ def trade_one_symbol(
                 "low": df["low"].tolist(),
                 "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
             }
-            meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="(state) SHORT")
+            meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="(state) SHORT",
+                                   session_logger=session_logger, signal="SELL")
             if meta:
                 position_book[symbol] = meta
         return
@@ -595,7 +674,8 @@ def trade_one_symbol(
                     "low": df["low"].tolist(),
                     "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                 }
-                meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="BUY")
+                meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="BUY",
+                                       session_logger=session_logger, signal="BUY")
                 if meta:
                     position_book[symbol] = meta
         else:
@@ -629,7 +709,8 @@ def trade_one_symbol(
                             "low": df["low"].tolist(),
                             "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                         }
-                        meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="SHORT")
+                        meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="SHORT",
+                                               session_logger=session_logger, signal="SELL")
                         if meta:
                             position_book[symbol] = meta
                 else:
@@ -758,6 +839,16 @@ def main(args: argparse.Namespace) -> None:
     scale_out_levels = parse_scale_out(args.scale_out)
     session: Dict[str, Any] = {"pnl_today": 0.0, "halted": False}
 
+    # Diagnóstico estructurado (Fase B): un archivo JSONL por corrida, con la
+    # config completa al inicio (vars(args) capta cualquier flag existente o
+    # futuro sin tener que listarlos a mano y arriesgarse a que se desactualice).
+    session_logger = SessionLogger()
+    session_config = dict(vars(args))
+    session_config["symbols_parsed"] = symbols
+    session_config["starting_equity"] = equity
+    session_logger.session_start(session_config)
+    print(f"🗒️  Diagnóstico estructurado: {session_logger.path}")
+
     logger.info(
         "Loop multi-símbolo: %s, tf=%s, lookback=%s, strategy=%s, hours_back=%s, allow_shorts=%s, ignore_clock=%s, ensemble_mode=%s",
         symbols, args.timeframe, args.lookback, args.strategy, args.hours_back, args.allow_shorts, args.ignore_clock, args.ensemble_mode
@@ -796,6 +887,7 @@ def main(args: argparse.Namespace) -> None:
                         wrappers=wrappers,
                         scale_out_levels=scale_out_levels,
                         session=session,
+                        session_logger=session_logger,
                     )
                 except Exception as e_sym:
                     logger.exception(f"Error procesando [{sym}]: {e_sym}")
@@ -811,11 +903,14 @@ def main(args: argparse.Namespace) -> None:
         except KeyboardInterrupt:
             logger.info("Bot detenido manualmente.")
             print("🛑 Bot detenido manualmente.")
+            session_logger.session_end("manual_stop")
             break
         except Exception as e:
             logger.exception(f"Error en loop principal: {e}")
             print(f"❌ Error en loop: {e}")
             time.sleep(10)
+
+    session_logger.close()
 
 
 if __name__ == "__main__":
