@@ -52,7 +52,7 @@ class Settings:
     # ---------- Market Data API (también con fallback) ----------
     APCA_DATA_BASE_URL: str | None = _env(
         "APCA_DATA_BASE_URL", "ALPACA_DATA_BASE_URL", "ALPACA_DATA_URL",
-        default="https://data.alpaca.markets",
+        default="https://data.alpaca.markets/v2",
     )
 
     # ---------- Opcionales de la app ----------

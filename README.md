@@ -90,7 +90,7 @@ Copy `.env.sample` → `.env` and fill in your **Alpaca Paper** keys:
 
 ```env
 APCA_BASE_URL=https://paper-api.alpaca.markets
-APCA_DATA_BASE_URL=https://data.alpaca.markets
+APCA_DATA_BASE_URL=https://data.alpaca.markets/v2
 APCA_API_KEY_ID=your_key_id
 APCA_API_SECRET_KEY=your_secret
 LOG_LEVEL=INFO
