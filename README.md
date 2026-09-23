@@ -1,5 +1,6 @@
 # Trading Bot (Paper) — Stocks/ETFs with *Ensemble*, Risk Management and Profit Protection
 
+[![tests](https://github.com/maxwellgr/trading-bot-part1/actions/workflows/tests.yml/badge.svg)](https://github.com/maxwellgr/trading-bot-part1/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Status](https://img.shields.io/badge/Status-Actively%20maintained-brightgreen)
