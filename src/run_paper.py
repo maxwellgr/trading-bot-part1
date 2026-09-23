@@ -27,6 +27,7 @@ from .ensemble import Ensemble, StrategyWrapper
 
 # === Diagnóstico estructurado (Fase B — observability only) ===
 from .structured_logger import SessionLogger
+from .session_summary import format_summary
 
 # === Guardas de ejecución (datos obsoletos + idempotencia de señales) ===
 from .execution_guards import ExecutionGuards, FreshnessStatus
@@ -957,6 +958,40 @@ def main(args: argparse.Namespace) -> None:
     )
     print("🔁 Loop iniciado. CTRL+C para detener.")
 
+    # Cierre ordenado: pase lo que pase, UN session_end con el resumen.
+    # Ctrl+C (incluso durante el back-off de 10s tras un error) = parada
+    # manual; cualquier otra excepción se registra como motivo y se relanza.
+    end_reason = "loop_exit"
+    try:
+        _run_loop(args, symbols, broker, risk, strat, position_book, ensemble, wrappers,
+                  scale_out_levels, session, session_logger, guards)
+        end_reason = "manual_stop"
+    except KeyboardInterrupt:
+        logger.info("Bot detenido manualmente.")
+        print("🛑 Bot detenido manualmente.")
+        end_reason = "manual_stop"
+    except BaseException as e:
+        end_reason = f"exception:{type(e).__name__}"
+        raise
+    finally:
+        _finish_session(session_logger, end_reason)
+
+
+def _finish_session(session_logger: SessionLogger, reason: str) -> None:
+    """Escribe el único session_end (idempotente), imprime el resumen y cierra el JSONL."""
+    try:
+        summary = session_logger.session_end(reason)
+        if summary is not None:
+            print(format_summary(summary, reason))
+    except Exception as e:
+        logger.warning(f"No se pudo escribir el resumen de sesión: {e}")
+    finally:
+        session_logger.close()
+
+
+def _run_loop(args, symbols, broker, risk, strat, position_book, ensemble, wrappers,
+              scale_out_levels, session, session_logger, guards) -> None:
+    """Loop principal (sin cambios de comportamiento). Retorna tras Ctrl+C."""
     while True:
         try:
             if session.get("halted"):
@@ -1008,17 +1043,14 @@ def main(args: argparse.Namespace) -> None:
         except KeyboardInterrupt:
             logger.info("Bot detenido manualmente.")
             print("🛑 Bot detenido manualmente.")
-            session_logger.session_end("manual_stop")
             break
         except Exception as e:
             logger.exception(f"Error en loop principal: {e}")
             print(f"❌ Error en loop: {e}")
             time.sleep(10)
 
-    session_logger.close()
 
-
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Paper-trading multi-símbolo (Alpaca) con estrategias, ensemble, control de riesgo avanzado y protecciones de ganancias")
     # símbolos
     p.add_argument("--symbol", type=str, default="AAPL")
@@ -1105,8 +1137,11 @@ if __name__ == "__main__":
                    help="Cierra si devuelve más de esta fracción (0–1) del PnL pico por trade.")
     p.add_argument("--daily-profit-halt", type=float, default=300.0,
                    help="Pausa nuevas entradas al alcanzar este PnL realizado del día (USD).")
+    return p
 
-    args = p.parse_args()
+
+if __name__ == "__main__":
+    args = build_arg_parser().parse_args()
 
     # Validación suave para 'ma'
     if args.strategy == "ma" and args.fast >= args.slow:

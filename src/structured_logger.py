@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .session_summary import SessionSummary
+
 
 SESSIONS_DIR = Path("logs") / "sessions"
 
@@ -130,6 +132,9 @@ class SessionLogger:
         self.path = self.directory / f"{self.session_id}.jsonl"
         self._fh = open(self.path, "a", encoding="utf-8", newline="\n")
         self._seq = 0
+        self._ended = False
+        # Contadores de fin de sesión, derivados solo de lo que se escribe aquí.
+        self.summary = SessionSummary(self.session_id)
 
     def _write(self, event_type: str, fields: Dict[str, Any]) -> None:
         self._seq += 1
@@ -143,6 +148,12 @@ class SessionLogger:
         self._fh.write(json.dumps(record, ensure_ascii=False, default=_json_default))
         self._fh.write("\n")
         self._fh.flush()
+        # El resumen es secundario: un fallo aquí nunca debe romper el log
+        # ni, por extensión, el tick de trading que lo llamó.
+        try:
+            self.summary.observe(event_type, fields)
+        except Exception:
+            pass
 
     def close(self) -> None:
         try:
@@ -154,11 +165,26 @@ class SessionLogger:
     def session_start(self, config: Dict[str, Any]) -> None:
         self._write("session_start", {"config": config, "git_commit": get_git_commit()})
 
-    def session_end(self, reason: str = "", extra: Optional[Dict[str, Any]] = None) -> None:
+    def session_end(self, reason: str = "", extra: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Escribe session_end UNA sola vez por sesión, con el resumen de
+        contadores en `summary`. Llamadas posteriores no escriben nada y
+        devuelven None; la primera devuelve el resumen escrito.
+        """
+        if self._ended:
+            return None
+        self._ended = True
+        summary = self.summary.to_dict()
         fields: Dict[str, Any] = {"reason": reason}
         if extra:
             fields.update(extra)
+        fields["summary"] = summary
         self._write("session_end", fields)
+        return summary
+
+    @property
+    def ended(self) -> bool:
+        return self._ended
 
     # ---------------- eventos de estrategia/ensemble ----------------
     def strategy_evaluation(
