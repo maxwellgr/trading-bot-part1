@@ -231,10 +231,12 @@ class SessionLogger:
         position_size: Optional[float] = None,
         atr: Optional[float] = None,
         extra: Optional[Dict[str, Any]] = None,
+        bar_timestamp: Optional[str] = None,
     ) -> None:
         classified = classify_risk_reason(reason)
         fields: Dict[str, Any] = {
             "symbol": symbol,
+            "bar_timestamp": bar_timestamp,
             "side": side,
             "signal": signal,
             "decision": decision,
@@ -257,18 +259,21 @@ class SessionLogger:
         side: str,
         requested_qty: float,
         order_type: str = "market",
+        bar_timestamp: Optional[str] = None,
     ) -> None:
         self._write("order_submission", {
             "symbol": symbol,
+            "bar_timestamp": bar_timestamp,
             "side": side,
             "requested_qty": requested_qty,
             "order_type": order_type,
         })
 
-    def order_result(self, symbol: str, order: Optional[Dict[str, Any]]) -> None:
+    def order_result(self, symbol: str, order: Optional[Dict[str, Any]], bar_timestamp: Optional[str] = None) -> None:
         order = order or {}
         self._write("order_result", {
             "symbol": symbol,
+            "bar_timestamp": bar_timestamp,
             "order_id": order.get("id"),
             "side": order.get("side"),
             "status": order.get("status"),
@@ -289,3 +294,43 @@ class SessionLogger:
         fields: Dict[str, Any] = {"symbol": symbol, "action": action}
         fields.update(details)
         self._write("position_management", fields)
+
+    # ---------------- guardas de ejecución ----------------
+    def data_freshness(
+        self,
+        symbol: str,
+        timeframe: str,
+        bar_timestamp: Optional[str],
+        status: str,  # "stale" / "still_stale" / "recovered"
+        age_seconds: Optional[float],
+        threshold_seconds: Optional[float],
+        unchanged_seconds: Optional[float],
+    ) -> None:
+        self._write("data_freshness", {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "bar_timestamp": bar_timestamp,
+            "status": status,
+            "age_seconds": age_seconds,
+            "threshold_seconds": threshold_seconds,
+            "unchanged_seconds": unchanged_seconds,
+        })
+
+    def execution_guard(
+        self,
+        symbol: str,
+        bar_timestamp: Optional[str],
+        side: str,
+        action: str,
+        guard: str,  # "STALE_DATA" / "DUPLICATE_SIGNAL"
+        detail: str = "",
+    ) -> None:
+        """Una señal accionable NO llegó a riesgo/orden por una guarda de ejecución."""
+        self._write("execution_guard", {
+            "symbol": symbol,
+            "bar_timestamp": bar_timestamp,
+            "side": side,
+            "action": action,
+            "guard": guard,
+            "detail": detail,
+        })

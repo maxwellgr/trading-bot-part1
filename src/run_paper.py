@@ -28,6 +28,9 @@ from .ensemble import Ensemble, StrategyWrapper
 # === Diagnóstico estructurado (Fase B — observability only) ===
 from .structured_logger import SessionLogger
 
+# === Guardas de ejecución (datos obsoletos + idempotencia de señales) ===
+from .execution_guards import ExecutionGuards, FreshnessStatus
+
 
 # ---------------- Utilidades ----------------
 def parse_symbols(single: str, plural: str) -> List[str]:
@@ -239,6 +242,7 @@ def _open_position(
     label: str,
     session_logger: Optional[SessionLogger] = None,
     signal: Optional[str] = None,
+    bar_timestamp: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Evalúa una entrada con el RiskManager y, si se aprueba, coloca la orden
@@ -264,6 +268,7 @@ def _open_position(
             position_size=decision.qty if decision.allow else None,
             atr=decision.meta.get("atr") if decision.meta else None,
             extra={"risk_reward_meta": decision.meta.get("rr") if decision.meta else None},
+            bar_timestamp=bar_timestamp,
         )
 
     if not (decision.allow and decision.qty > 0):
@@ -273,10 +278,11 @@ def _open_position(
     broker.cancel_open_orders(symbol)
     market_side = "buy" if side == Side.LONG else "sell"
     if session_logger is not None:
-        session_logger.order_submission(symbol=symbol, side=market_side, requested_qty=decision.qty)
+        session_logger.order_submission(symbol=symbol, side=market_side, requested_qty=decision.qty,
+                                        bar_timestamp=bar_timestamp)
     order = broker.place_order_market(symbol, market_side, decision.qty)
     if session_logger is not None:
-        session_logger.order_result(symbol=symbol, order=order)
+        session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_timestamp)
     risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
     meta = {
         "side": side, "qty": decision.qty, "entry": decision.entry or price,
@@ -286,6 +292,47 @@ def _open_position(
     }
     print(f"✅ {label} [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
     return meta
+
+
+def _execution_gate(
+    guards: Optional[ExecutionGuards],
+    freshness: Optional[FreshnessStatus],
+    symbol: str,
+    bar_ts: Optional[str],
+    side: str,
+    action: str,
+    session_logger: Optional[SessionLogger] = None,
+) -> bool:
+    """
+    Única puerta entre una señal ACCIONABLE (BUY/SELL, por señal o por flag
+    de estado) y RiskManager/broker. No cambia la señal: solo decide si este
+    intento concreto puede continuar.
+      1) Datos obsoletos -> no se abre/cierra nada por señal.
+      2) Misma (símbolo, vela, lado) ya procesada -> no se repite.
+    Devuelve True si el intento puede seguir. Sin guards (tests/uso
+    antiguo) siempre True.
+    """
+    if guards is None:
+        return True
+    if freshness is not None and freshness.is_stale:
+        msg = (f"[{symbol}] {action} {side} bloqueado: datos obsoletos "
+               f"(vela {bar_ts}, edad {freshness.age_seconds:.0f}s > {freshness.threshold_seconds:.0f}s).")
+        logger.info(msg)
+        print(f"🧊 {msg}")
+        if session_logger is not None:
+            session_logger.execution_guard(symbol=symbol, bar_timestamp=bar_ts, side=side, action=action,
+                                           guard="STALE_DATA",
+                                           detail=f"age={freshness.age_seconds:.0f}s threshold={freshness.threshold_seconds:.0f}s")
+        return False
+    if not guards.dedup.try_acquire(symbol, bar_ts, side):
+        msg = f"[{symbol}] {action} {side} ya procesado para la vela {bar_ts}; se omite (idempotencia)."
+        logger.info(msg)
+        print(f"🔁 {msg}")
+        if session_logger is not None:
+            session_logger.execution_guard(symbol=symbol, bar_timestamp=bar_ts, side=side, action=action,
+                                           guard="DUPLICATE_SIGNAL")
+        return False
+    return True
 
 
 # ---------------- Adapter para el RiskManager ----------------
@@ -343,6 +390,8 @@ def trade_one_symbol(
     scale_out_levels: List[Tuple[float, float]],
     session: Dict[str, Any],
     session_logger: Optional[SessionLogger] = None,
+    guards: Optional[ExecutionGuards] = None,
+    market_open: bool = True,
 ) -> None:
     # Verificamos si es operable
     if not broker.get_asset_tradable(symbol):
@@ -354,7 +403,9 @@ def trade_one_symbol(
 
     print(f"⏳ Tick [{symbol}]: pidiendo barras…")
     bars = broker.get_bars(symbol, timeframe=timeframe, limit=lookback, start_iso=start_iso)
-    df = bars_to_df(bars)
+    # get_bars ya devuelve las `lookback` más recientes en orden cronológico;
+    # tail() lo garantiza también aquí (nunca las más antiguas).
+    df = bars_to_df(bars).tail(lookback)
     if df.empty:
         logger.warning(f"[{symbol}] Sin barras.")
         print(f"⚠️  [{symbol}] Sin barras.")
@@ -430,6 +481,28 @@ def trade_one_symbol(
             )
 
     print(f"📈 [{symbol}] Última {timeframe}: close={price:.2f}  (rows={len(df)})")
+
+    # ---------- Frescura de datos (capa de seguridad, no cambia la señal) ----------
+    freshness: Optional[FreshnessStatus] = None
+    if guards is not None:
+        freshness = guards.freshness.observe(symbol, df.index[-1].to_pydatetime(), datetime.now(timezone.utc), market_open)
+        if freshness.event in ("stale", "still_stale"):
+            msg = (f"[{symbol}] Datos {timeframe} OBSOLETOS: última vela {bar_ts} con edad {freshness.age_seconds:.0f}s "
+                   f"(umbral {freshness.threshold_seconds:.0f}s; sin avanzar hace {freshness.unchanged_seconds:.0f}s). "
+                   f"Señales BUY/SELL bloqueadas hasta que llegue una vela nueva.")
+            logger.warning(msg)
+            print(f"⚠️  {msg}")
+        elif freshness.event == "recovered":
+            logger.info(f"[{symbol}] Datos {timeframe} vuelven a estar al día (vela {bar_ts}).")
+        if freshness.event is not None and session_logger is not None:
+            session_logger.data_freshness(
+                symbol=symbol, timeframe=timeframe, bar_timestamp=bar_ts, status=freshness.event,
+                age_seconds=freshness.age_seconds, threshold_seconds=freshness.threshold_seconds,
+                unchanged_seconds=freshness.unchanged_seconds,
+            )
+
+    def gate(order_side: str, action: str) -> bool:
+        return _execution_gate(guards, freshness, symbol, bar_ts, order_side, action, session_logger)
     if args.debug_ma and ma_fast is not None and ma_slow is not None:
         print(f"🧮 [{symbol}] MA_fast({args.fast})={ma_fast:.4f} | MA_slow({args.slow})={ma_slow:.4f}")
 
@@ -531,7 +604,7 @@ def trade_one_symbol(
                         "bar_timestamp": bar_ts, "r_level": R_level, "pct": pct,
                         "closed_qty": close_qty, "remaining_qty": meta["qty"],
                     })
-                    session_logger.order_result(symbol=symbol, order=scale_order)
+                    session_logger.order_result(symbol=symbol, order=scale_order, bar_timestamp=bar_ts)
                 qty = meta["qty"]
                 if qty <= 0:
                     break
@@ -553,7 +626,7 @@ def trade_one_symbol(
                         "bar_timestamp": bar_ts, "pnl": pnl, "peak_pnl": meta.get("peak_pnl", 0.0),
                         "max_giveback_pct": args.max_giveback_pct, "qty": qty,
                     })
-                    session_logger.order_result(symbol=symbol, order=order)
+                    session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
                 # objetivo diario
                 session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
                 if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
@@ -565,6 +638,12 @@ def trade_one_symbol(
         hit_stop = meta.get("stop") is not None and ((side == Side.LONG and price <= meta["stop"]) or (side == Side.SHORT and price >= meta["stop"]))
         hit_take = take is not None and ((side == Side.LONG and price >= take) or (side == Side.SHORT and price <= take))
         exit_signal = (sig == "SELL" and side == Side.LONG) or (sig == "BUY" and side == Side.SHORT) or (sig == "EXIT")
+        # Stop/take son protección y NO pasan por la guarda; solo la salida
+        # disparada por señal se bloquea con datos obsoletos o si ya se intentó.
+        # Si se bloquea, no hay nada más que hacer en este tick (las rutas de
+        # abajo usarían la misma clave y serían bloqueadas igual).
+        if exit_signal and not (hit_stop or hit_take) and not gate("SELL" if side == Side.LONG else "BUY", "signal_exit"):
+            return
 
         if hit_stop or hit_take or exit_signal:
             close_qty = abs(pos_qty) if pos_qty != 0 else qty
@@ -583,7 +662,7 @@ def trade_one_symbol(
                 session_logger.position_management(symbol, "exit", {
                     "bar_timestamp": bar_ts, "exit_kind": exit_kind, "pnl": pnl, "qty": close_qty,
                 })
-                session_logger.order_result(symbol=symbol, order=order)
+                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
             # objetivo diario
             session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
             if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
@@ -604,36 +683,42 @@ def trade_one_symbol(
 
     # ---------- Flags por estado (MA) ----------
     if args.enter_when_above and pos_qty == 0 and ma_fast is not None and ma_slow is not None and ma_fast > ma_slow:
-        bars_dict = {
-            "close": df["close"].tolist(),
-            "high": df["high"].tolist(),
-            "low": df["low"].tolist(),
-            "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
-        }
-        meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="(state) BUY",
-                               session_logger=session_logger, signal="BUY")
-        if meta:
-            position_book[symbol] = meta
+        if gate("BUY", "state_entry"):
+            bars_dict = {
+                "close": df["close"].tolist(),
+                "high": df["high"].tolist(),
+                "low": df["low"].tolist(),
+                "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
+            }
+            meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="(state) BUY",
+                                   session_logger=session_logger, signal="BUY", bar_timestamp=bar_ts)
+            if meta:
+                position_book[symbol] = meta
         return
 
     if args.exit_when_below and pos_qty > 0 and ma_fast is not None and ma_slow is not None and ma_fast < ma_slow:
-        qty = pos_qty
-        broker.cancel_open_orders(symbol)
-        order = broker.place_order_market(symbol, "sell", qty)
-        meta = position_book.pop(symbol, {"side": Side.LONG, "qty": qty, "entry": price})
-        pnl = (price - meta.get("entry", price)) * qty
-        risk.record_close(symbol, Side.LONG, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
-        print(f"✅ (state) SELL [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
-        session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-        if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-            session["halted"] = True
-            print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+        if gate("SELL", "state_exit"):
+            qty = pos_qty
+            broker.cancel_open_orders(symbol)
+            if session_logger is not None:
+                session_logger.order_submission(symbol=symbol, side="sell", requested_qty=qty, bar_timestamp=bar_ts)
+            order = broker.place_order_market(symbol, "sell", qty)
+            if session_logger is not None:
+                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
+            meta = position_book.pop(symbol, {"side": Side.LONG, "qty": qty, "entry": price})
+            pnl = (price - meta.get("entry", price)) * qty
+            risk.record_close(symbol, Side.LONG, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
+            print(f"✅ (state) SELL [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
+            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
+            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
+                session["halted"] = True
+                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
         return
 
     if args.allow_shorts and args.enter_short_when_below and pos_qty == 0 and ma_fast is not None and ma_slow is not None and ma_fast < ma_slow:
         if not broker.get_asset_shortable(symbol):
             print(f"🚫 [{symbol}] No shortable. Omito apertura de corto.")
-        else:
+        elif gate("SELL", "state_short_entry"):
             bars_dict = {
                 "close": df["close"].tolist(),
                 "high": df["high"].tolist(),
@@ -641,23 +726,28 @@ def trade_one_symbol(
                 "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
             }
             meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="(state) SHORT",
-                                   session_logger=session_logger, signal="SELL")
+                                   session_logger=session_logger, signal="SELL", bar_timestamp=bar_ts)
             if meta:
                 position_book[symbol] = meta
         return
 
     if args.allow_shorts and args.exit_short_when_above and pos_qty < 0 and ma_fast is not None and ma_slow is not None and ma_fast > ma_slow:
-        qty = abs(pos_qty)
-        broker.cancel_open_orders(symbol)
-        order = broker.place_order_market(symbol, "buy", qty)
-        meta = position_book.pop(symbol, {"side": Side.SHORT, "qty": qty, "entry": price})
-        pnl = (meta.get("entry", price) - price) * qty
-        risk.record_close(symbol, Side.SHORT, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
-        print(f"✅ (state) COVER [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
-        session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-        if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-            session["halted"] = True
-            print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+        if gate("BUY", "state_cover"):
+            qty = abs(pos_qty)
+            broker.cancel_open_orders(symbol)
+            if session_logger is not None:
+                session_logger.order_submission(symbol=symbol, side="buy", requested_qty=qty, bar_timestamp=bar_ts)
+            order = broker.place_order_market(symbol, "buy", qty)
+            if session_logger is not None:
+                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
+            meta = position_book.pop(symbol, {"side": Side.SHORT, "qty": qty, "entry": price})
+            pnl = (meta.get("entry", price) - price) * qty
+            risk.record_close(symbol, Side.SHORT, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
+            print(f"✅ (state) COVER [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
+            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
+            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
+                session["halted"] = True
+                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
         return
 
     # ---------- Ejecución por señal clásica (ensemble/single) usando RiskManager ----------
@@ -667,7 +757,7 @@ def trade_one_symbol(
                 msg = f"[{symbol}] Ya estás largo ({pos_qty})."
                 logger.info(msg)
                 print(f"ℹ️  {msg}")
-            else:
+            elif gate("BUY", "signal_entry"):
                 bars_dict = {
                     "close": df["close"].tolist(),
                     "high": df["high"].tolist(),
@@ -675,14 +765,18 @@ def trade_one_symbol(
                     "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                 }
                 meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="BUY",
-                                       session_logger=session_logger, signal="BUY")
+                                       session_logger=session_logger, signal="BUY", bar_timestamp=bar_ts)
                 if meta:
                     position_book[symbol] = meta
-        else:
+        elif gate("BUY", "signal_cover"):
             # BUY para cerrar short existente
             qty = abs(pos_qty)
             broker.cancel_open_orders(symbol)
+            if session_logger is not None:
+                session_logger.order_submission(symbol=symbol, side="buy", requested_qty=qty, bar_timestamp=bar_ts)
             order = broker.place_order_market(symbol, "buy", qty)
+            if session_logger is not None:
+                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
             meta = position_book.pop(symbol, {"side": Side.SHORT, "qty": qty, "entry": price})
             pnl = (meta.get("entry", price) - price) * qty
             risk.record_close(symbol, Side.SHORT, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
@@ -702,7 +796,7 @@ def trade_one_symbol(
                 if args.allow_shorts:
                     if not broker.get_asset_shortable(symbol):
                         print(f"🚫 [{symbol}] No shortable. Ignoro apertura de corto.")
-                    else:
+                    elif gate("SELL", "signal_short_entry"):
                         bars_dict = {
                             "close": df["close"].tolist(),
                             "high": df["high"].tolist(),
@@ -710,18 +804,22 @@ def trade_one_symbol(
                             "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                         }
                         meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="SHORT",
-                                               session_logger=session_logger, signal="SELL")
+                                               session_logger=session_logger, signal="SELL", bar_timestamp=bar_ts)
                         if meta:
                             position_book[symbol] = meta
                 else:
                     msg = f"[{symbol}] Señal SELL pero shorts deshabilitados."
                     logger.info(msg)
                     print(f"ℹ️  {msg}")
-        else:
+        elif gate("SELL", "signal_exit"):
             # SELL para cerrar largo existente
             qty = pos_qty
             broker.cancel_open_orders(symbol)
+            if session_logger is not None:
+                session_logger.order_submission(symbol=symbol, side="sell", requested_qty=qty, bar_timestamp=bar_ts)
             order = broker.place_order_market(symbol, "sell", qty)
+            if session_logger is not None:
+                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
             meta = position_book.pop(symbol, {"side": Side.LONG, "qty": qty, "entry": price})
             pnl = (price - meta.get("entry", price)) * qty
             risk.record_close(symbol, Side.LONG, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
@@ -849,6 +947,10 @@ def main(args: argparse.Namespace) -> None:
     session_logger.session_start(session_config)
     print(f"🗒️  Diagnóstico estructurado: {session_logger.path}")
 
+    # Guardas de ejecución: frescura de datos + idempotencia por
+    # (símbolo, vela, lado). Viven toda la sesión (estado en memoria).
+    guards = ExecutionGuards(args.timeframe)
+
     logger.info(
         "Loop multi-símbolo: %s, tf=%s, lookback=%s, strategy=%s, hours_back=%s, allow_shorts=%s, ignore_clock=%s, ensemble_mode=%s",
         symbols, args.timeframe, args.lookback, args.strategy, args.hours_back, args.allow_shorts, args.ignore_clock, args.ensemble_mode
@@ -862,7 +964,8 @@ def main(args: argparse.Namespace) -> None:
                 time.sleep(30)
                 continue
 
-            if not broker.get_clock_is_open() and not args.ignore_clock:
+            market_open = broker.get_clock_is_open()
+            if not market_open and not args.ignore_clock:
                 msg = "Mercado cerrado. Reintentando en 60s."
                 logger.info(msg)
                 print(f"⏸️  {msg}")
@@ -888,6 +991,8 @@ def main(args: argparse.Namespace) -> None:
                         scale_out_levels=scale_out_levels,
                         session=session,
                         session_logger=session_logger,
+                        guards=guards,
+                        market_open=market_open,
                     )
                 except Exception as e_sym:
                     logger.exception(f"Error procesando [{sym}]: {e_sym}")

@@ -24,7 +24,18 @@ class BrokerAlpaca(BrokerBase):
         return r.json()
 
     def get_bars(self, symbol: str, timeframe: str = "1Min", limit: int = 120, start_iso: str | None = None):
-        params = {"timeframe": timeframe, "limit": limit, "feed": "iex"}  # feed gratuito
+        """
+        Devuelve las `limit` barras MÁS RECIENTES del intervalo [start, ahora],
+        en orden cronológico (antigua -> reciente).
+
+        sort=desc es imprescindible: por defecto Alpaca ordena asc y `limit`
+        corta la PRIMERA página, así que con start=ahora-6h y más de `limit`
+        barras en el intervalo devolvía siempre las `limit` más antiguas
+        (el bot quedó evaluando la vela 15:29 UTC durante una hora). Con desc
+        la primera página son las más nuevas; se invierten aquí para que los
+        llamadores sigan recibiendo orden cronológico.
+        """
+        params = {"timeframe": timeframe, "limit": limit, "feed": "iex", "sort": "desc"}  # feed gratuito
         if start_iso:
             params["start"] = start_iso  # ISO8601, ej: 2025-09-21T13:00:00Z
         r = requests.get(
@@ -35,7 +46,8 @@ class BrokerAlpaca(BrokerBase):
         )
         r.raise_for_status()
         data = r.json()
-        return data.get("bars", [])
+        bars = data.get("bars") or []
+        return list(reversed(bars))
     def get_clock_is_open(self) -> bool:
         """Devuelve True si el mercado está abierto (según Alpaca)."""
         r = requests.get(f"{self.base}/v2/clock", headers=_headers(), timeout=15)
