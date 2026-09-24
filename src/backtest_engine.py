@@ -96,6 +96,8 @@ class BacktestConfig:
     decision_end_utc: Optional[pd.Timestamp] = None
     record_evaluations: bool = False
     entry_diagnostics: bool = True        # contexto de entrada (solo lectura; ver backtest_entry_quality.py)
+    window_hours_limit: bool = True       # False: ventana = solo `lookback` velas (sin el límite de hours_back);
+                                          # para estrategias de investigación, p. ej. H001 (5Min RTH que cruza sesiones)
 
 
 class SimRiskAdapter(AlpacaRiskAdapter):
@@ -154,7 +156,8 @@ def _in_rth(idx: pd.DatetimeIndex) -> np.ndarray:
 
 
 class BacktestEngine:
-    def __init__(self, config: BacktestConfig, bars: Dict[str, pd.DataFrame], args: Optional[argparse.Namespace] = None):
+    def __init__(self, config: BacktestConfig, bars: Dict[str, pd.DataFrame], args: Optional[argparse.Namespace] = None,
+                 strategy: Optional[Any] = None):
         self.cfg = config
         self.args = args if args is not None else production_args()
         if self.args.timeframe != config.timeframe:
@@ -163,8 +166,9 @@ class BacktestEngine:
         if not tf:
             raise ValueError(f"Timeframe no soportado: {config.timeframe}")
         self.tf_seconds = tf
-        self.strategy = build_strategy(self.args)
-        self.min_needed = self._min_needed()
+        # Estrategia inyectada (solo investigación/backtest): expone evaluate(df) y min_bars. Sin ella, la de producción.
+        self.strategy = strategy if strategy is not None else build_strategy(self.args)
+        self.min_needed = int(getattr(strategy, "min_bars", 0)) if strategy is not None else self._min_needed()
         self.scale_out_levels = parse_scale_out(self.args.scale_out)
 
         self.sim = SimBroker(config.initial_equity, config.slippage_bps, config.commission)
@@ -215,8 +219,11 @@ class BacktestEngine:
         if self.cfg.decision_end_utc is not None:
             ok &= np.asarray(decision_idx <= self.cfg.decision_end_utc)
         # Ventana en vivo: velas con t >= ahora - hours_back (luego tail(lookback)).
-        back_ns = int(self.args.hours_back) * 3600 * 10**9
-        window_lo = np.searchsorted(ts_ns, ts_ns + self.tf_seconds * 10**9 - back_ns, side="left")
+        if self.cfg.window_hours_limit:
+            back_ns = int(self.args.hours_back) * 3600 * 10**9
+            window_lo = np.searchsorted(ts_ns, ts_ns + self.tf_seconds * 10**9 - back_ns, side="left")
+        else:
+            window_lo = np.zeros(len(ts_ns), dtype=np.int64)  # solo tail(lookback)
         return _Sym(
             name=name, order=order, df=df, ts_ns=ts_ns,
             open=df["open"].to_numpy(float), high=df["high"].to_numpy(float), low=df["low"].to_numpy(float),
@@ -515,5 +522,5 @@ class BacktestEngine:
 
 
 def run_backtest(config: BacktestConfig, bars: Dict[str, pd.DataFrame],
-                 args: Optional[argparse.Namespace] = None) -> BacktestResult:
-    return BacktestEngine(config, bars, args).run()
+                 args: Optional[argparse.Namespace] = None, strategy: Optional[Any] = None) -> BacktestResult:
+    return BacktestEngine(config, bars, args, strategy).run()

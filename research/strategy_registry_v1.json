@@ -7,7 +7,7 @@
   },
   "entry_schema": {
     "id": "string, unique",
-    "status": "draft | frozen | validated | rejected | retired",
+    "status": "SPECIFIED_NOT_IMPLEMENTED | IMPLEMENTED | DEVELOPMENT_REVIEWED | FROZEN | VALIDATION_VIEWED | REJECTED_AT_DEVELOPMENT | REJECTED_AT_VALIDATION | FORWARD_PAPER | RETIRED (legacy lowercase 'frozen' = FROZEN)",
     "description": "what the hypothesis is and why (written BEFORE looking at validation)",
     "code_commit": "git commit hash of the exact code evaluated (clean tree)",
     "parameters": "object: every parameter that differs from production defaults, plus the ones under test",
@@ -18,7 +18,10 @@
     "validation_result": "reference + headline metrics (VALIDATION EVIDENCE), or null",
     "known_period_result": "optional reference (KNOWN/CONTAMINATED EVIDENCE; never used for selection)",
     "forward_notes": "chronological paper/live observations (FORWARD EVIDENCE)",
-    "notes": "free text"
+    "notes": "free text",
+    "spec_document": "path to the pre-registration document (rules, constants, gates)",
+    "preregistered_gates": "development/validation gates recorded before any result",
+    "review_decisions": "design questions settled before implementation (date + decisions); part of the frozen spec"
   },
   "entries": [
     {
@@ -92,6 +95,114 @@
       },
       "forward_notes": [],
       "notes": "Parameters were set before this protocol existed and have not been changed by any research step."
+    },
+    {
+      "id": "STRATEGY_V2_HYPOTHESIS_001",
+      "status": "REJECTED_AT_DEVELOPMENT",
+      "created": "2026-09-24",
+      "description": "5Min regular-session trend + pullback continuation, long-only. Entry logic only; risk and trade management reused unchanged from MA_BASELINE_V1.",
+      "spec_document": "research/strategy_v2_hypothesis_001.md",
+      "code_commit": "uncommitted working tree on top of cfe33dd (src/strategy_v2_h001.py, src/research_h001.py, src/backtest_engine.py hooks); must be committed and recorded before FROZEN",
+      "spec_commit": "cfe33dd705ea0636d64d3d08809210e160fb4958",
+      "timeframe": "5Min resampled from the audited 1Min IEX raw cache; regular session only",
+      "parameters": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "slope_bars": 3,
+        "pullback_bars": 5,
+        "touch_atr_mult": 0.5,
+        "atr_window": 14,
+        "indicator_window_bars": 200,
+        "warmup_bars": 150,
+        "min_session_bar_for_signal": 6,
+        "exit_signal": "none",
+        "risk_and_management": "identical to MA_BASELINE_V1 parameters (see that entry)",
+        "execution": {
+          "fill_model": "next_bar_open",
+          "slippage_bps": 5.0,
+          "commission_per_fill": 0.0
+        },
+        "warmup_support_bars_before_each_split": 200,
+        "slope_definition": "EMA_T - EMA_{T-3} (includes signal bar)",
+        "touch_reference": "pullback bar's own EMA20 and ATR",
+        "setup_consumed_on": "BUY emission",
+        "pullback_session_rule": "pullback window and T-1 in same session; first signal at 6th session bar"
+      },
+      "preregistered_gates": {
+        "development_5bps": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gte": 1.1,
+          "completed_trades_gte": 150,
+          "max_drawdown_pct_lte": 25,
+          "total_r_gt": 0,
+          "max_symbol_share_of_positive_pnl_lte": 0.5
+        },
+        "validation_5bps_once": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gt": 1.0,
+          "total_r_gt": 0,
+          "max_drawdown_pct_lte": 30
+        },
+        "validation_directional_comparison": [
+          "trades_per_day",
+          "expectancy_r",
+          "profit_factor",
+          "max_drawdown",
+          "max_symbol_share_of_positive_pnl"
+        ],
+        "d6_definition": "P_s = sum realized_pnl of completed trades per symbol; pool = sum max(P_s,0); pass iff pool > 0 and max(max(P_s,0)/pool) <= 0.50 (exact, no rounding); pool == 0 -> FAIL (undefined, empty positive pool)"
+      },
+      "development_result": {
+        "ref": "data/research_v1/h001_development/h001_report.json",
+        "run_at_code": "cfe33dd705ea0636d64d3d08809210e160fb4958",
+        "working_tree_dirty": true,
+        "trades": 1679,
+        "expectancy_r": -0.05863950352072758,
+        "profit_factor": 0.7950554907476028,
+        "total_r": -98.4557264113016,
+        "max_drawdown_pct": -44.096988256482504,
+        "realized_pnl_closed_trades": -38012.71842750028,
+        "gates": {
+          "D1_expectancy_r": "FAIL",
+          "D2_profit_factor": "FAIL",
+          "D3_completed_trades": "PASS",
+          "D4_max_drawdown_pct": "FAIL",
+          "D5_total_r": "FAIL",
+          "D6_symbol_concentration": "FAIL"
+        },
+        "d6": {
+          "positive_pool": 3576.484417499933,
+          "max_share_symbol": "MARA",
+          "max_share": 0.9720562825575528
+        },
+        "progression_to_validation": "FAIL"
+      },
+      "frozen_date": null,
+      "validation_viewed_at": null,
+      "validation_viewed_before_parameter_changes": null,
+      "validation_result": null,
+      "known_period_result": null,
+      "forward_notes": [],
+      "notes": "Motivated by diagnostics on the KNOWN/CONTAMINATED period, which therefore provides no evidence for it. Any change after development review -> new ID. Development gate FAILED on 2026-09-24 (D1, D2, D4, D5, D6); validation never run; H001 is closed.",
+      "review_decisions": {
+        "settled": "2026-09-24",
+        "Q1": "no strategy exit signal",
+        "Q2": "resample audited 1Min cache (RTH)",
+        "Q3": "200-bar cross-session window, 150-bar warm-up, 200 warm-up support bars before each evaluation split (indicators only)",
+        "Q4": "EMA_T - EMA_{T-3}",
+        "Q5": "same-session pullback; first signal at 6th bar",
+        "Q6": "consumed on BUY emission",
+        "Q7": "positive-pool share <= 0.50; empty pool -> FAIL",
+        "Q8": "touch uses pullback bar's own EMA20/ATR"
+      },
+      "implementation": {
+        "strategy": "src/strategy_v2_h001.py",
+        "runner": "src/research_h001.py",
+        "tests": "tests/test_strategy_v2_h001.py",
+        "implemented": "2026-09-24",
+        "engine_lookback_bars": 278,
+        "window_hours_limit": false
+      }
     }
   ]
 }

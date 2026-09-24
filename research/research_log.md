@@ -90,3 +90,42 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
   - IEX feed gaps on 2025-03-10 (no bars) and 2024-12-23 (bars stop at 10:22 ET) fall in development.
   - The NVDA 10:1 split on 2024-06-10 is stored unadjusted. It did not enter the 24h strategy window (the split was on a Monday).
 - **Strategy behavior changed:** No.
+
+## 2026-09-24 — STRATEGY_V2_HYPOTHESIS_001 specified (pre-registration)
+
+- **Question (to be tested later):** Does a 5Min regular-session trend + pullback continuation entry (long-only) give fewer, higher-quality entries than MA_BASELINE_V1, with costs a smaller fraction of R?
+- **Work:**
+  - Wrote `research/strategy_v2_hypothesis_001.md`: exact rules, fixed constants, reset behavior, reused risk/management, execution model, and pre-registered development and validation gates.
+  - Added a registry entry with status SPECIFIED_NOT_IMPLEMENTED at spec commit cfe33dd.
+- **Pending:** 8 review questions (Q1–Q8) must be settled before implementation.
+- **Result:** None. Nothing was implemented, backtested or viewed for H001. Development, validation and known-period data were not touched.
+- **Disclosure:** the idea was motivated by known/contaminated-period diagnostics, which therefore provide no evidence for it.
+- **Strategy behavior changed:** No.
+
+## 2026-09-24 — STRATEGY_V2_HYPOTHESIS_001 review decisions settled
+
+- **Decisions:** Q1–Q8 approved and recorded in §15 of `research/strategy_v2_hypothesis_001.md` and in the registry.
+- **Additions:**
+  - 200 warm-up support bars before each evaluation split's start. They are indicator history only, with no signals, trades or metrics. This is read as research-split warm-up, not NVDA split handling.
+  - Exact D6 positive-pool formula; an empty pool means FAIL.
+- **Status:** still SPECIFIED_NOT_IMPLEMENTED. No code, no backtest, no data viewed for H001.
+- **Strategy behavior changed:** No.
+
+## 2026-09-24 — STRATEGY_V2_HYPOTHESIS_001 implemented; DEVELOPMENT run
+
+- **Implementation:**
+  - `src/strategy_v2_h001.py` (resampler, strategy, gates, hygiene guard) and `src/research_h001.py` (runner).
+  - Backtest-only engine hooks: an injected strategy and `window_hours_limit`, both defaulting to prior behavior.
+  - 41 tests; full suite 397 passing.
+  - MA_BASELINE_V1 development rerun after the hooks: bit-identical.
+  - The known period was not run, per instruction.
+- **Implementation note (no rule change):** each bar's EMA/ATR is computed on its own 200-bar window, i.e. what was computed when that bar was the signal bar. The §5.5 session replay therefore reproduces the emitted signals exactly.
+- **DEVELOPMENT EVIDENCE (2024-01-02 → 2025-12-31), 5 bps:**
+  - 1,679 trades, win 41.2%, P&L −$38,012.72, expectancy −0.0586R, PF 0.795, total R −98.46, max DD −44.10%.
+  - 200 support bars per symbol.
+  - The unadjusted NVDA split suppressed NVDA signals on 2024-06-10 and 06-11; the first signal came on 2024-06-12.
+- **Pre-registered gate:**
+  - D1 FAIL, D2 FAIL, D3 PASS, D4 FAIL, D5 FAIL.
+  - D6 FAIL: positive pool $3,576.48; MARA 97.2%, MU 2.8%; all other symbols negative.
+- **Outcome:** progression to validation **FAIL**, so H001 is REJECTED_AT_DEVELOPMENT (spec §12). Validation was never run and never viewed. H001 is closed; any follow-up needs a new ID and a new pre-registration.
+- **Strategy behavior changed:** No live behavior changed.
