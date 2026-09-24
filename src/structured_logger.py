@@ -286,6 +286,7 @@ class SessionLogger:
         requested_qty: float,
         order_type: str = "market",
         bar_timestamp: Optional[str] = None,
+        purpose: Optional[str] = None,
     ) -> None:
         self._write("order_submission", {
             "symbol": symbol,
@@ -293,13 +294,18 @@ class SessionLogger:
             "side": side,
             "requested_qty": requested_qty,
             "order_type": order_type,
+            "purpose": purpose,
         })
 
-    def order_result(self, symbol: str, order: Optional[Dict[str, Any]], bar_timestamp: Optional[str] = None) -> None:
+    def order_result(self, symbol: str, order: Optional[Dict[str, Any]], bar_timestamp: Optional[str] = None,
+                     purpose: Optional[str] = None, requested_qty: Optional[float] = None) -> None:
+        """Acuse del POST /v2/orders tal cual (normalmente pending_new): NO confirma ejecución."""
         order = order or {}
         self._write("order_result", {
             "symbol": symbol,
             "bar_timestamp": bar_timestamp,
+            "purpose": purpose,
+            "requested_qty": requested_qty,
             "order_id": order.get("id"),
             "side": order.get("side"),
             "status": order.get("status"),
@@ -308,6 +314,59 @@ class SessionLogger:
             "filled_at": order.get("filled_at"),
             "filled_qty": order.get("filled_qty"),
             "filled_avg_price": order.get("filled_avg_price"),
+        })
+
+    def order_update(
+        self,
+        symbol: str,
+        order_id: str,
+        purpose: Optional[str],
+        side: Optional[str],
+        requested_qty: Optional[float],
+        status: Optional[str],
+        filled_qty: Optional[float],
+        newly_filled_qty: float,
+        filled_avg_price: Optional[float],
+        fill_price: Optional[float],
+        filled_at: Optional[str],
+        submitted_at: Optional[str],
+        latency_seconds: Optional[float],
+        terminal: bool,
+        realized_pnl: Optional[float] = None,
+        cost_basis: Optional[float] = None,
+        pnl_today: Optional[float] = None,
+        halt_triggered: bool = False,
+        bar_timestamp: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> None:
+        """
+        Estado de una orden visto al reconciliar con Alpaca (GET /v2/orders/{id}).
+        Se escribe cuando cambia status o filled_qty. newly_filled_qty/fill_price
+        son SOLO las acciones nuevas desde el update anterior; realized_pnl es el
+        P&L confirmado que esas acciones aportaron (None si no aplica o si no hay
+        costo base confirmado).
+        """
+        self._write("order_update", {
+            "symbol": symbol,
+            "bar_timestamp": bar_timestamp,
+            "order_id": order_id,
+            "purpose": purpose,
+            "side": side,
+            "requested_qty": requested_qty,
+            "status": status,
+            "terminal": terminal,
+            "filled_qty": filled_qty,
+            "newly_filled_qty": newly_filled_qty,
+            "filled_avg_price": filled_avg_price,
+            "fill_price": fill_price,
+            "filled_at": filled_at,
+            "submitted_at": submitted_at,
+            "latency_seconds": latency_seconds,
+            "cost_basis": cost_basis,
+            "realized_pnl": realized_pnl,
+            "pnl_today": pnl_today,
+            "halt_triggered": halt_triggered,
+            "note": note,
         })
 
     # ---------------- gestión de posición ----------------
@@ -348,7 +407,7 @@ class SessionLogger:
         bar_timestamp: Optional[str],
         side: str,
         action: str,
-        guard: str,  # "STALE_DATA" / "DUPLICATE_SIGNAL"
+        guard: str,  # "STALE_DATA" / "DUPLICATE_SIGNAL" / "DAILY_PROFIT_HALT"
         detail: str = "",
     ) -> None:
         """Una señal accionable NO llegó a riesgo/orden por una guarda de ejecución."""

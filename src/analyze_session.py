@@ -36,6 +36,8 @@ MIN_STALE_SECONDS = 300
 _BAR_EVENTS = ("strategy_evaluation", "ensemble_decision")
 _SIGNALS = ("BUY", "SELL", "HOLD")
 _MAX_EXAMPLES = 5
+# Copia local de order_tracking.TERMINAL_STATUSES (verificada en tests).
+_TERMINAL_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
 
 
 def timeframe_to_seconds(timeframe: Optional[str]) -> Optional[int]:
@@ -298,21 +300,64 @@ def _risk(by_type) -> Dict[str, Any]:
     }
 
 
+def _order_lifecycle(events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Estado final por order_id (último order_result/order_update visto) y fills confirmados."""
+    last: Dict[str, Dict[str, Any]] = {}
+    partial: set = set()
+    fills, qty, pnl = 0, 0.0, 0.0
+    for r in events:
+        et = r.get("event_type")
+        if et not in ("order_result", "order_update"):
+            continue
+        oid = r.get("order_id")
+        if oid:
+            last[str(oid)] = r
+            if r.get("status") == "partially_filled":
+                partial.add(str(oid))
+        if et == "order_update":
+            if r.get("newly_filled_qty"):
+                fills += 1
+                qty += float(r["newly_filled_qty"])
+            if r.get("realized_pnl") is not None:
+                pnl += float(r["realized_pnl"])
+    final = Counter(str(r.get("status")) if r.get("status") else "status_unavailable" for r in last.values())
+    unresolved = sorted(oid for oid, r in last.items() if r.get("status") not in _TERMINAL_STATUSES)
+    return {"last": last, "final": final, "partial": sorted(partial), "fills": fills,
+            "filled_qty_total": round(qty, 6), "confirmed_realized_pnl": round(pnl, 6), "unresolved": unresolved}
+
+
 def _orders(by_type) -> Dict[str, Any]:
-    subs, results = by_type["order_submission"], by_type["order_result"]
+    subs, results, updates = by_type["order_submission"], by_type["order_result"], by_type["order_update"]
     status = Counter(str(r.get("status")) if r.get("status") else "status_unavailable" for r in results)
     per_symbol: Dict[str, Counter] = defaultdict(Counter)
     for r in subs:
         per_symbol[str(r.get("symbol"))]["submissions"] += 1
     for r in results:
         per_symbol[str(r.get("symbol"))]["results"] += 1
+    for r in updates:
+        if r.get("newly_filled_qty"):
+            per_symbol[str(r.get("symbol"))]["fills"] += 1
+    life = _order_lifecycle(sorted(results + updates, key=lambda r: r.get("observation_id") or 0))
+    note = None if (subs or results) else "Sin órdenes en esta sesión (no es un error)."
+    if results and not updates:
+        note = ("Sin eventos order_update: el log no contiene confirmación de fills "
+                "(los estados de order_result son solo el acuse del envío).")
     return {
         "submissions": len(subs),
         "results": len(results),
         "results_by_status": dict(status.most_common()),
-        "per_symbol": {s: {"submissions": c.get("submissions", 0), "results": c.get("results", 0)}
+        "updates": len(updates),
+        "final_status_by_order": dict(life["final"].most_common()),
+        "partially_filled_orders": life["partial"],
+        "fills": life["fills"],
+        "filled_qty_total": life["filled_qty_total"],
+        "confirmed_realized_pnl": life["confirmed_realized_pnl"],
+        "unresolved_orders": [{"order_id": oid, "symbol": life["last"][oid].get("symbol"),
+                               "purpose": life["last"][oid].get("purpose"), "status": life["last"][oid].get("status")}
+                              for oid in life["unresolved"]],
+        "per_symbol": {s: {"submissions": c.get("submissions", 0), "results": c.get("results", 0), "fills": c.get("fills", 0)}
                        for s, c in sorted(per_symbol.items())},
-        "note": None if (subs or results) else "Sin órdenes en esta sesión (no es un error).",
+        "note": note,
     }
 
 
@@ -410,6 +455,7 @@ def reconstruct_summary(records: List[Dict[str, Any]], config: Dict[str, Any]) -
     ens_bar: set = set()
     guards, fresh, decisions, reasons, statuses, etypes = Counter(), Counter(), Counter(), Counter(), Counter(), Counter()
     subs = 0
+    updates = 0
     for r in events:
         et = r.get("event_type")
         etypes[et] += 1
@@ -433,6 +479,9 @@ def reconstruct_summary(records: List[Dict[str, Any]], config: Dict[str, Any]) -
             subs += 1
         elif et == "order_result":
             statuses[str(r.get("status")) if r.get("status") else "status_unavailable"] += 1
+        elif et == "order_update":
+            updates += 1
+    life = _order_lifecycle(events)
 
     configured = config.get("symbols_parsed") if isinstance(config.get("symbols_parsed"), list) else []
     symbols = [str(s) for s in configured] + sorted(s for s in bars if s not in configured)
@@ -457,7 +506,14 @@ def reconstruct_summary(records: List[Dict[str, Any]], config: Dict[str, Any]) -
         "data_freshness": dict(fresh),
         "risk": {"total": sum(decisions.values()), "accept": decisions.get("ACCEPT", 0),
                  "reject": decisions.get("REJECT", 0), "rejections_by_reason_code": dict(reasons)},
-        "orders": {"submissions": subs, "results_by_status": dict(statuses)},
+        "orders": {"submissions": subs, "results_by_status": dict(statuses),
+                   "updates": updates,
+                   "final_status_by_order": dict(life["final"]),
+                   "partially_filled_orders": len(life["partial"]),
+                   "fills": life["fills"],
+                   "filled_qty_total": life["filled_qty_total"],
+                   "unresolved_orders": len(life["unresolved"]),
+                   "confirmed_realized_pnl": life["confirmed_realized_pnl"]},
         "event_counts": dict(etypes),
     }
 
@@ -473,6 +529,17 @@ def _flatten(d: Any, prefix: str = "") -> Dict[str, Any]:
 
 _ABSENT = "<ausente>"
 
+# Campos añadidos al resumen después de que existieran sesiones grabadas: si el
+# session_end.summary no trae NINGUNO (sesión anterior), no se comparan en vez
+# de reportarlos como discrepancia.
+_LATER_SUMMARY_FIELDS = ("orders.updates", "orders.final_status_by_order", "orders.partially_filled_orders",
+                         "orders.fills", "orders.filled_qty_total", "orders.unresolved_orders",
+                         "orders.confirmed_realized_pnl")
+
+
+def _is_later_field(field: str) -> bool:
+    return any(field == f or field.startswith(f + ".") for f in _LATER_SUMMARY_FIELDS)
+
 
 def _norm_empty(v: Any) -> Any:
     return {} if v == _ABSENT else v
@@ -485,6 +552,13 @@ def _reconcile(records, end, config) -> Dict[str, Any]:
         return {"status": "UNAVAILABLE", "reason": why, "mismatches": [], "compared_fields": 0}
     rebuilt = _flatten(reconstruct_summary(records, config))
     logged = {k: v for k, v in _flatten(summary).items() if k.split(".")[0] not in _NOT_RECONSTRUCTABLE}
+    not_compared = dict(_NOT_RECONSTRUCTABLE)
+    if not any(_is_later_field(k) for k in logged):
+        legacy = [f for f in rebuilt if _is_later_field(f)]
+        for f in legacy:
+            rebuilt.pop(f)
+        if legacy:
+            not_compared["orders.<ciclo de vida>"] = "resumen anterior a order_update: campos ausentes en session_end"
     mismatches = []
     for field in sorted(set(rebuilt) | set(logged)):
         a, b = logged.get(field, _ABSENT), rebuilt.get(field, _ABSENT)
@@ -496,7 +570,7 @@ def _reconcile(records, end, config) -> Dict[str, Any]:
         "status": "MISMATCH" if mismatches else "MATCH",
         "compared_fields": len(set(rebuilt) | set(logged)),
         "mismatches": mismatches,
-        "not_compared": _NOT_RECONSTRUCTABLE,
+        "not_compared": not_compared,
     }
 
 
@@ -555,12 +629,24 @@ def format_report(a: Dict[str, Any]) -> str:
 
     L.append("")
     L.append(f"--- Órdenes: {orders['submissions']} enviadas, {orders['results']} resultados ---")
-    if orders["note"]:
+    if not (orders["submissions"] or orders["results"]):
         L.append(orders["note"])
     else:
         if orders["results_by_status"]:
-            L.append(f"Estados: {_fmt_counts(orders['results_by_status'])}")
-        L.append("Por símbolo: " + ", ".join(f"{s} {d['submissions']}/{d['results']}" for s, d in orders["per_symbol"].items()))
+            L.append(f"Acuse de envío (order_result): {_fmt_counts(orders['results_by_status'])}")
+        if orders["final_status_by_order"]:
+            L.append(f"Estado final por orden: {_fmt_counts(orders['final_status_by_order'])}")
+        L.append(f"Actualizaciones: {orders['updates']} | fills confirmados: {orders['fills']} "
+                 f"(qty {orders['filled_qty_total']:g}) | parcialmente llenadas: {len(orders['partially_filled_orders'])} "
+                 f"| P&L realizado confirmado: {orders['confirmed_realized_pnl']:+.2f}")
+        if orders["unresolved_orders"]:
+            L.append(f"[!] Órdenes sin estado final: {len(orders['unresolved_orders'])} | ej: "
+                     + ", ".join(f"{u['symbol']} {u['purpose'] or '-'} {u['status']} {u['order_id']}"
+                                 for u in orders["unresolved_orders"][:_MAX_EXAMPLES]))
+        L.append("Por símbolo (envíos/acuses/fills): " + ", ".join(
+            f"{s} {d['submissions']}/{d['results']}/{d['fills']}" for s, d in orders["per_symbol"].items()))
+        if orders["note"]:
+            L.append(orders["note"])
 
     L.append("")
     L.append(f"--- Reconciliación con session_end.summary: {rec['status']} ---")

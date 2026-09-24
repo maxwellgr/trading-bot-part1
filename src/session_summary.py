@@ -20,6 +20,10 @@ _BAR_EVENTS = ("strategy_evaluation", "ensemble_decision")
 
 _ENSEMBLE_SIGNALS = ("BUY", "SELL", "HOLD")
 
+# Copia de order_tracking.TERMINAL_STATUSES (tests/test_order_lifecycle.py
+# verifica que coinciden; analyze_session.py mantiene otra copia propia).
+_TERMINAL_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
+
 
 def _normalize_signal(signal: Any) -> str:
     return "HOLD" if signal in (None, "", "HOLD") else str(signal)
@@ -49,6 +53,12 @@ class SessionSummary:
         self.risk_rejections_by_reason: Counter = Counter()
         self.order_submissions = 0
         self.order_results_by_status: Counter = Counter()
+        self.order_updates = 0
+        self._order_last_status: Dict[str, str] = {}
+        self._partially_filled_orders: Set[str] = set()
+        self.fills = 0
+        self.filled_qty_total = 0.0
+        self.confirmed_realized_pnl = 0.0
 
     # ---------------- alimentación ----------------
     def observe(self, event_type: str, fields: Dict[str, Any]) -> None:
@@ -83,6 +93,24 @@ class SessionSummary:
         elif event_type == "order_result":
             status = fields.get("status")
             self.order_results_by_status[str(status) if status else "status_unavailable"] += 1
+            self._track_order_status(fields)
+        elif event_type == "order_update":
+            self.order_updates += 1
+            self._track_order_status(fields)
+            new_qty = fields.get("newly_filled_qty") or 0
+            if new_qty:
+                self.fills += 1
+                self.filled_qty_total += float(new_qty)
+            if fields.get("realized_pnl") is not None:
+                self.confirmed_realized_pnl += float(fields["realized_pnl"])
+
+    def _track_order_status(self, fields: Dict[str, Any]) -> None:
+        oid, status = fields.get("order_id"), fields.get("status")
+        if not oid:
+            return
+        self._order_last_status[str(oid)] = str(status) if status else "status_unavailable"
+        if status == "partially_filled":
+            self._partially_filled_orders.add(str(oid))
 
     # ---------------- salida ----------------
     def _per_symbol(self) -> Dict[str, Dict[str, Any]]:
@@ -132,6 +160,13 @@ class SessionSummary:
             "orders": {
                 "submissions": self.order_submissions,
                 "results_by_status": dict(self.order_results_by_status),
+                "updates": self.order_updates,
+                "final_status_by_order": dict(Counter(self._order_last_status.values())),
+                "partially_filled_orders": len(self._partially_filled_orders),
+                "fills": self.fills,
+                "filled_qty_total": round(self.filled_qty_total, 6),
+                "unresolved_orders": sum(1 for st in self._order_last_status.values() if st not in _TERMINAL_STATUSES),
+                "confirmed_realized_pnl": round(self.confirmed_realized_pnl, 6),
             },
             "event_counts": dict(self.event_counts),
         }
@@ -151,6 +186,12 @@ def format_summary(summary: Dict[str, Any], reason: str = "") -> str:
         + (f" | resultados: {_fmt_counts(orders['results_by_status'])}" if orders["results_by_status"] else "")
         + (f" | guardas: {_fmt_counts(summary['execution_guards'])}" if summary["execution_guards"] else ""),
     ]
+    if orders.get("final_status_by_order"):
+        lines.append(
+            f"   Estado final por orden: {_fmt_counts(orders['final_status_by_order'])} | fills={orders['fills']} "
+            f"qty={orders['filled_qty_total']:g} | parciales={orders['partially_filled_orders']} "
+            f"| sin resolver={orders['unresolved_orders']} | P&L confirmado={orders['confirmed_realized_pnl']:+.2f}"
+        )
     for sym, d in summary["per_symbol"].items():
         lines.append(f"   · {sym:<6} velas={d['unique_bar_count']:<4} {d['first_bar_timestamp'] or '-'} → {d['last_bar_timestamp'] or '-'}")
     return "\n".join(lines)

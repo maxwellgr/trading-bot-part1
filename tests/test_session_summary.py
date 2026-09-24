@@ -127,14 +127,19 @@ def test_order_counts_and_results_by_status(slog):
     slog.order_result(symbol="NVDA", order={"id": "2", "status": "accepted"})
     slog.order_result(symbol="AMD", order=None)
     s = slog.session_end("test")
-    assert s["orders"] == {"submissions": 2, "results_by_status": {"accepted": 2, "status_unavailable": 1}}
+    assert s["orders"] == {"submissions": 2, "results_by_status": {"accepted": 2, "status_unavailable": 1},
+                           "updates": 0, "final_status_by_order": {"accepted": 2}, "partially_filled_orders": 0,
+                           "fills": 0, "filled_qty_total": 0.0, "unresolved_orders": 2,
+                           "confirmed_realized_pnl": 0.0}
 
 
 def test_empty_session_reports_zeros_not_fabricated_values(slog):
     s = slog.session_end("test")
     assert s["unique_bar_count_total"] == 0
     assert s["risk"]["total"] == 0 and s["risk"]["rejections_by_reason_code"] == {}
-    assert s["orders"] == {"submissions": 0, "results_by_status": {}}
+    assert s["orders"] == {"submissions": 0, "results_by_status": {}, "updates": 0, "final_status_by_order": {},
+                           "partially_filled_orders": 0, "fills": 0, "filled_qty_total": 0.0,
+                           "unresolved_orders": 0, "confirmed_realized_pnl": 0.0}
     assert s["execution_guards"] == {}
 
 

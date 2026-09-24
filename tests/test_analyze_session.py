@@ -79,7 +79,9 @@ def test_normal_completed_session(slog):
     assert a["market_data"]["per_symbol"]["NVDA"]["unique_bar_count"] == 6
     assert a["execution_integrity"]["status"] == "OK"
     assert a["orders"]["submissions"] == 1 and a["orders"]["results_by_status"] == {"accepted": 1}
-    assert a["orders"]["per_symbol"] == {"NVDA": {"submissions": 1, "results": 1}}
+    assert a["orders"]["per_symbol"] == {"NVDA": {"submissions": 1, "results": 1, "fills": 0}}
+    # acuse "accepted" sin order_update: la orden queda sin estado final confirmado
+    assert [u["order_id"] for u in a["orders"]["unresolved_orders"]] == ["o1"]
     assert a["summary_reconciliation"]["status"] == "MATCH"
     assert a["warnings"] == []
     assert "Sesión az_test" in az.format_report(a)

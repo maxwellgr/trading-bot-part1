@@ -5,6 +5,7 @@ import sys
 import time
 import json
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
@@ -31,6 +32,14 @@ from .session_summary import format_summary
 
 # === Guardas de ejecución (datos obsoletos + idempotencia de señales) ===
 from .execution_guards import ExecutionGuards, FreshnessStatus
+
+# === Ciclo de vida de órdenes (P&L solo con fills confirmados por Alpaca) ===
+from .order_tracking import ENTRY_PURPOSE, OrderTracker, TrackedOrder, parse_alpaca_ts
+
+# Tras enviar una orden se consulta su estado durante como mucho este tiempo
+# (sin bloquear el loop); si sigue abierta, se reconcilia en ticks posteriores.
+FILL_REFRESH_SECONDS = 1.0
+FILL_REFRESH_INTERVAL = 0.25
 
 
 # ---------------- Utilidades ----------------
@@ -233,15 +242,231 @@ def reconcile_positions(broker: BrokerAlpaca, position_book: Dict[str, dict], sy
     save_position_book(position_book)
 
 
+@dataclass
+class OrderContext:
+    """Todo lo que necesita el ciclo de vida de una orden para aplicar sus fills."""
+    broker: Any
+    orders: OrderTracker
+    position_book: Dict[str, dict]
+    risk: Any
+    session: Dict[str, Any]
+    daily_profit_halt: float
+    session_logger: Optional[SessionLogger] = None
+
+
+def _qty(x: float):
+    """Cantidades de Alpaca llegan como float/str; enteras se guardan como int."""
+    x = float(x)
+    return int(x) if x.is_integer() else x
+
+
+def _book_realized_pnl(ctx: OrderContext, pnl: float) -> bool:
+    """
+    ÚNICO punto que suma P&L realizado del día. Solo se llama con P&L de
+    fills confirmados. Devuelve True si este fill activó el objetivo diario.
+    """
+    s = ctx.session
+    s["pnl_today"] = s.get("pnl_today", 0.0) + pnl
+    if ctx.daily_profit_halt > 0 and not s.get("halted") and s["pnl_today"] >= ctx.daily_profit_halt:
+        s["halted"] = True
+        msg = (f"Objetivo diario alcanzado con P&L confirmado: +{s['pnl_today']:.2f}. "
+               f"Nuevas entradas bloqueadas; las posiciones abiertas se siguen gestionando.")
+        logger.info(msg)
+        print(f"🧭 {msg}")
+        return True
+    return False
+
+
+def _place_order(
+    ctx: OrderContext,
+    symbol: str,
+    side: str,
+    qty: int,
+    purpose: str,
+    position_side: Side,
+    bar_timestamp: Optional[str],
+    cancel_first: bool = False,
+) -> Tuple[dict, Optional[TrackedOrder]]:
+    """
+    Envía una orden de mercado y la registra para reconciliación. NO aplica
+    fills ni toca el position_book: el acuse del POST (pending_new) no
+    confirma ejecución. Todas las rutas de orden pasan por aquí, así que
+    todas escriben order_submission + order_result.
+    """
+    if cancel_first:
+        ctx.broker.cancel_open_orders(symbol)
+    meta = ctx.position_book.get(symbol) or {}
+    cost_basis = None if purpose == ENTRY_PURPOSE else meta.get("cost_basis")
+    if ctx.session_logger is not None:
+        ctx.session_logger.order_submission(symbol=symbol, side=side, requested_qty=qty,
+                                            bar_timestamp=bar_timestamp, purpose=purpose)
+    order = ctx.broker.place_order_market(symbol, side, qty) or {}
+    if ctx.session_logger is not None:
+        ctx.session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_timestamp,
+                                        purpose=purpose, requested_qty=qty)
+    oid = order.get("id")
+    if not oid:
+        logger.warning(f"[{symbol}] Orden {purpose} sin id en la respuesta del broker: no se puede reconciliar "
+                       f"y no se contabilizará P&L por ella.")
+        return order, None
+    tracked = TrackedOrder(
+        order_id=str(oid), symbol=symbol, side=side, purpose=purpose, position_side=position_side.value,
+        requested_qty=qty, submitted_at=order.get("submitted_at"), bar_timestamp=bar_timestamp,
+        cost_basis=cost_basis, status=order.get("status"),
+    )
+    ctx.orders.add(tracked)
+    return order, tracked
+
+
+def _apply_order_snapshot(ctx: OrderContext, tracked: TrackedOrder, snapshot: Dict[str, Any]) -> None:
+    """
+    ÚNICO punto que aplica el estado real de una orden (GET /v2/orders/{id}):
+      - entrada: fija el costo base con filled_avg_price confirmado;
+      - salida / scale-out: P&L = (precio de las acciones NUEVAS - costo base) * nuevas,
+        y baja meta["qty"] solo por lo realmente llenado;
+      - estado terminal: deja de seguir la orden y cierra la posición solo si
+        la cantidad confirmada llegó a 0 (un remanente sigue gestionado).
+    Solo cuenta lo llenado desde el snapshot anterior, así que reconciliar
+    el mismo estado varias veces no duplica nada.
+    """
+    delta = tracked.apply(snapshot)
+    if not delta.changed:
+        return
+    sym = tracked.symbol
+    meta = ctx.position_book.get(sym)
+    realized: Optional[float] = None
+    halt_triggered = False
+    note: Optional[str] = None
+
+    if delta.new_qty > 0:
+        if tracked.is_entry:
+            if meta is not None:
+                meta["cost_basis"] = tracked.filled_avg_price
+                meta["entry_filled_qty"] = _qty(tracked.accounted_qty)
+        else:
+            if tracked.cost_basis is not None:
+                sign = 1.0 if tracked.position_side == Side.LONG.value else -1.0
+                realized = sign * (delta.new_notional - tracked.cost_basis * delta.new_qty)
+                halt_triggered = _book_realized_pnl(ctx, realized)
+                if meta is not None:
+                    meta["realized_pnl"] = meta.get("realized_pnl", 0.0) + realized
+            else:
+                note = "cost_basis_unavailable"
+                logger.warning(f"[{sym}] Fill confirmado de {delta.new_qty:g} ({tracked.purpose}) sin precio de entrada "
+                               f"confirmado: P&L NO contabilizado (no se estima).")
+            if meta is not None:
+                meta["qty"] = max(0, _qty(float(meta.get("qty", 0)) - delta.new_qty))
+
+    latency = None
+    filled_at = snapshot.get("filled_at")
+    t_sub, t_fill = parse_alpaca_ts(tracked.submitted_at or snapshot.get("submitted_at")), parse_alpaca_ts(filled_at)
+    if t_sub and t_fill:
+        latency = round((t_fill - t_sub).total_seconds(), 3)
+
+    if ctx.session_logger is not None:
+        ctx.session_logger.order_update(
+            symbol=sym, order_id=tracked.order_id, purpose=tracked.purpose, side=tracked.side,
+            requested_qty=tracked.requested_qty, status=delta.status, filled_qty=tracked.accounted_qty,
+            newly_filled_qty=delta.new_qty, filled_avg_price=tracked.filled_avg_price, fill_price=delta.fill_price,
+            filled_at=filled_at, submitted_at=tracked.submitted_at, latency_seconds=latency, terminal=delta.terminal,
+            realized_pnl=realized, cost_basis=(tracked.filled_avg_price if tracked.is_entry else tracked.cost_basis),
+            pnl_today=ctx.session.get("pnl_today"), halt_triggered=halt_triggered,
+            bar_timestamp=tracked.bar_timestamp, note=note,
+        )
+    if delta.new_qty > 0:
+        pnl_txt = f" | P&L confirmado {realized:+.2f}" if realized is not None else ""
+        print(f"🧾 [{sym}] Fill {tracked.purpose}: {delta.new_qty:g} @ {delta.fill_price:.4f} ({delta.status}){pnl_txt}")
+
+    if delta.terminal:
+        ctx.orders.remove(tracked.order_id)
+        _finalize_order(ctx, tracked, meta)
+
+
+def _finalize_order(ctx: OrderContext, tracked: TrackedOrder, meta: Optional[dict]) -> None:
+    sym = tracked.symbol
+    if meta is None:
+        return
+    if tracked.is_entry:
+        filled = _qty(tracked.accounted_qty)
+        if filled <= 0:
+            ctx.position_book.pop(sym, None)
+            msg = f"[{sym}] Entrada terminada en '{tracked.status}' sin fills: no hay posición."
+            logger.warning(msg)
+            print(f"⚠️  {msg}")
+            if ctx.session_logger is not None:
+                ctx.session_logger.position_management(sym, "entry_unfilled", {
+                    "bar_timestamp": tracked.bar_timestamp, "order_id": tracked.order_id, "status": tracked.status,
+                })
+        elif filled != meta.get("qty"):
+            logger.warning(f"[{sym}] Entrada llenada parcialmente ({filled}/{tracked.requested_qty}); se gestiona {filled}.")
+            meta["qty"] = filled
+        return
+
+    if meta.get("qty", 0) <= 0:
+        # Posición completamente cerrada según fills confirmados: se registra el trade completo.
+        pnl_total = meta.get("realized_pnl") if meta.get("cost_basis") is not None else None
+        if pnl_total is not None:
+            ctx.risk.record_close(sym, meta["side"], meta.get("entry_filled_qty") or _qty(tracked.accounted_qty),
+                                  meta["cost_basis"], meta.get("stop", 0.0), meta.get("take"), pnl_total)
+        ctx.position_book.pop(sym, None)
+        pnl_txt = f"{pnl_total:+.2f}" if pnl_total is not None else "no disponible (sin costo base confirmado)"
+        print(f"✅ [{sym}] Posición cerrada ({tracked.purpose}) | P&L realizado confirmado del trade: {pnl_txt}")
+        if ctx.session_logger is not None:
+            ctx.session_logger.position_management(sym, "position_closed", {
+                "bar_timestamp": tracked.bar_timestamp, "purpose": tracked.purpose,
+                "realized_pnl": pnl_total, "order_id": tracked.order_id,
+            })
+    elif tracked.accounted_qty < tracked.requested_qty:
+        msg = (f"[{sym}] Orden {tracked.purpose} terminó en '{tracked.status}' con {tracked.accounted_qty:g}/"
+               f"{tracked.requested_qty} llenadas; el remanente ({meta['qty']}) sigue gestionado.")
+        logger.warning(msg)
+        print(f"⚠️  {msg}")
+
+
+def reconcile_order(ctx: OrderContext, tracked: TrackedOrder) -> bool:
+    """Consulta el estado real de una orden y lo aplica. False si no se pudo consultar."""
+    try:
+        snapshot = ctx.broker.get_order(tracked.order_id)
+    except Exception as e:
+        logger.warning(f"[{tracked.symbol}] No se pudo consultar la orden {tracked.order_id}: {e}")
+        return False
+    _apply_order_snapshot(ctx, tracked, snapshot or {})
+    return True
+
+
+def reconcile_pending_orders(ctx: OrderContext, symbol: Optional[str] = None) -> None:
+    for tracked in ctx.orders.open_orders(symbol):
+        reconcile_order(ctx, tracked)
+
+
+def _refresh_order(ctx: OrderContext, tracked: Optional[TrackedOrder]) -> None:
+    """Consulta breve justo tras el envío (≤ FILL_REFRESH_SECONDS). Si la orden
+    sigue abierta, queda registrada y se reconcilia en los ticks siguientes."""
+    if tracked is None:
+        return
+    deadline = time.monotonic() + FILL_REFRESH_SECONDS
+    while ctx.orders.get(tracked.order_id) is not None:
+        if not reconcile_order(ctx, tracked):
+            return
+        if ctx.orders.get(tracked.order_id) is None or time.monotonic() >= deadline:
+            return
+        time.sleep(FILL_REFRESH_INTERVAL)
+
+
+def _submit_and_refresh(ctx: OrderContext, symbol: str, side: str, qty: int, purpose: str,
+                        position_side: Side, bar_timestamp: Optional[str], cancel_first: bool = False) -> dict:
+    order, tracked = _place_order(ctx, symbol, side, qty, purpose, position_side, bar_timestamp, cancel_first)
+    _refresh_order(ctx, tracked)
+    return order
+
+
 def _open_position(
-    broker: BrokerAlpaca,
-    risk: AdvancedRiskManager,
+    ctx: OrderContext,
     symbol: str,
     side: Side,
     price: float,
     bars_dict: Dict[str, list],
     label: str,
-    session_logger: Optional[SessionLogger] = None,
     signal: Optional[str] = None,
     bar_timestamp: Optional[str] = None,
 ) -> Optional[dict]:
@@ -249,11 +474,26 @@ def _open_position(
     Evalúa una entrada con el RiskManager y, si se aprueba, coloca la orden
     de mercado y arma el registro de position_book. Centraliza lo que antes
     estaba duplicado (con pequeñas variaciones) en 4 lugares de este archivo.
-    Devuelve el meta a guardar en position_book, o None si se rechazó.
+    Devuelve el meta guardado en position_book, o None si se rechazó/bloqueó.
+
+    Con el objetivo diario alcanzado (session["halted"]) no se abre nada:
+    es la única puerta de las 4 rutas de entrada.
 
     session_logger es puramente observacional: registra la misma decisión
     que ya se imprime por consola, no participa en ella.
     """
+    risk, session_logger = ctx.risk, ctx.session_logger
+    if ctx.session.get("halted"):
+        msg = (f"[{symbol}] {label} bloqueado: objetivo diario alcanzado (P&L confirmado "
+               f"{ctx.session.get('pnl_today', 0.0):+.2f}). Solo se gestionan posiciones abiertas.")
+        logger.info(msg)
+        print(f"🧭 {msg}")
+        if session_logger is not None:
+            session_logger.execution_guard(symbol=symbol, bar_timestamp=bar_timestamp, side=signal or side.value,
+                                           action="entry", guard="DAILY_PROFIT_HALT",
+                                           detail=f"pnl_today={ctx.session.get('pnl_today', 0.0):.2f}")
+        return None
+
     decision: RiskDecision = risk.assess_entry(symbol, side, price, bars_dict)
 
     if session_logger is not None:
@@ -276,23 +516,25 @@ def _open_position(
         print(f"⛔ [{symbol}] {label} rechazado: {decision.reason}")
         return None
 
-    broker.cancel_open_orders(symbol)
     market_side = "buy" if side == Side.LONG else "sell"
-    if session_logger is not None:
-        session_logger.order_submission(symbol=symbol, side=market_side, requested_qty=decision.qty,
-                                        bar_timestamp=bar_timestamp)
-    order = broker.place_order_market(symbol, market_side, decision.qty)
-    if session_logger is not None:
-        session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_timestamp)
+    order, tracked = _place_order(ctx, symbol, market_side, decision.qty, ENTRY_PURPOSE, side,
+                                  bar_timestamp, cancel_first=True)
     risk_ps = abs((decision.entry or price) - (decision.stop or price)) or (0.01 * price)
+    # "entry" es el precio MODELADO (vela + slippage) y sigue alimentando R,
+    # break-even y stops como antes. El P&L realizado usa "cost_basis", que
+    # solo se fija con el filled_avg_price confirmado por Alpaca.
     meta = {
         "side": side, "qty": decision.qty, "entry": decision.entry or price,
         "stop": decision.stop, "take": decision.take_profit,
         "risk_ps": risk_ps, "be_done": False, "scaled": set(),
         "peak_px": decision.entry or price, "peak_pnl": 0.0,
+        "cost_basis": None, "entry_filled_qty": 0, "realized_pnl": 0.0,
     }
-    print(f"✅ {label} [{symbol}] x{decision.qty} @ {decision.entry:.2f} | SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
-    return meta
+    ctx.position_book[symbol] = meta
+    print(f"✅ {label} [{symbol}] x{decision.qty} orden enviada (ref. modelada {decision.entry:.2f}) | "
+          f"SL={decision.stop:.2f} TP={decision.take_profit:.2f} | id={order.get('id','sin_id')}")
+    _refresh_order(ctx, tracked)
+    return ctx.position_book.get(symbol)
 
 
 def _execution_gate(
@@ -393,7 +635,19 @@ def trade_one_symbol(
     session_logger: Optional[SessionLogger] = None,
     guards: Optional[ExecutionGuards] = None,
     market_open: bool = True,
+    orders: Optional[OrderTracker] = None,
 ) -> None:
+    ctx = OrderContext(
+        broker=broker, orders=orders if orders is not None else OrderTracker(),
+        position_book=position_book, risk=risk, session=session,
+        daily_profit_halt=float(getattr(args, "daily_profit_halt", 0.0) or 0.0),
+        session_logger=session_logger,
+    )
+    # Fills pendientes de este símbolo primero: el P&L y las cantidades que
+    # se usen abajo salen de lo que Alpaca confirmó, no de lo que se envió.
+    if ctx.orders.has_open(symbol):
+        reconcile_pending_orders(ctx, symbol)
+
     # Verificamos si es operable
     if not broker.get_asset_tradable(symbol):
         msg = f"{symbol} no es 'tradable'. Omito este tick."
@@ -519,6 +773,17 @@ def trade_one_symbol(
     pos_qty = broker.get_position_qty(symbol)  # positivo=long, negativo=short, 0=flat
     has_pos = symbol in position_book
 
+    # Orden de este símbolo aún sin estado final: la cantidad del broker está
+    # cambiando y el P&L no está confirmado. No se ajusta drift, no se gestiona
+    # ni se envía otra orden (evita vender dos veces lo mismo) hasta que
+    # Alpaca confirme; se reconcilia en el próximo tick.
+    if ctx.orders.has_open(symbol):
+        open_ids = ", ".join(f"{o.purpose}:{o.status}" for o in ctx.orders.open_orders(symbol))
+        msg = f"[{symbol}] Orden en curso sin confirmar ({open_ids}); se espera a Alpaca antes de gestionar u operar."
+        logger.info(msg)
+        print(f"⏳ {msg}")
+        return
+
     # Guarda contra drift: si el libro local cree tener posición pero el
     # broker ya no la tiene (cerrada externamente, o por cualquier motivo
     # fuera del bot), no sigas gestionando un fantasma — descarta el
@@ -593,19 +858,19 @@ def trade_one_symbol(
             key = f"R{R_level}"
             if R_now >= R_level and key not in meta.get("scaled", set()) and qty > 1:
                 close_qty = max(1, int(qty * pct))
-                if side == Side.LONG:
-                    scale_order = broker.place_order_market(symbol, "sell", close_qty)
-                else:
-                    scale_order = broker.place_order_market(symbol, "buy", close_qty)
                 meta.setdefault("scaled", set()).add(key)
-                meta["qty"] = qty - close_qty
-                print(f"✂️  [{symbol}] Scale-out {pct*100:.0f}% @ R={R_level:.1f} → qty={meta['qty']}")
+                print(f"✂️  [{symbol}] Scale-out {pct*100:.0f}% @ R={R_level:.1f}: orden de {close_qty} "
+                      f"(qty se ajusta con el fill confirmado)")
                 if session_logger is not None:
                     session_logger.position_management(symbol, "scale_out", {
                         "bar_timestamp": bar_ts, "r_level": R_level, "pct": pct,
-                        "closed_qty": close_qty, "remaining_qty": meta["qty"],
+                        "requested_qty": close_qty, "qty_before": qty,
                     })
-                    session_logger.order_result(symbol=symbol, order=scale_order, bar_timestamp=bar_ts)
+                _submit_and_refresh(ctx, symbol, "sell" if side == Side.LONG else "buy", close_qty,
+                                    "scale_out", side, bar_ts)
+                # Sin confirmación todavía -> nada más para este símbolo en este tick.
+                if ctx.orders.has_open(symbol) or symbol not in position_book:
+                    return
                 qty = meta["qty"]
                 if qty <= 0:
                     break
@@ -614,25 +879,15 @@ def trade_one_symbol(
         if args.max_giveback_pct > 0 and meta.get("peak_pnl", 0.0) > 0 and qty > 0:
             limit = meta["peak_pnl"] * (1.0 - args.max_giveback_pct)
             if open_pnl <= limit:
-                if side == Side.LONG:
-                    order = broker.place_order_market(symbol, "sell", qty)
-                else:
-                    order = broker.place_order_market(symbol, "buy", qty)
-                pnl = open_pnl
-                risk.record_close(symbol, side, qty, entry_px, meta.get("stop", 0.0), take, pnl)
-                position_book.pop(symbol, None)
-                print(f"🛡️  [{symbol}] Cierre por giveback (devuelto ≥ {args.max_giveback_pct:.0%}) | pnl={pnl:.2f} | id={order.get('id','sin_id')}")
+                print(f"🛡️  [{symbol}] Cierre por giveback (devuelto ≥ {args.max_giveback_pct:.0%}): orden de {qty} "
+                      f"(P&L se contabiliza con el fill confirmado)")
                 if session_logger is not None:
                     session_logger.position_management(symbol, "giveback_close", {
-                        "bar_timestamp": bar_ts, "pnl": pnl, "peak_pnl": meta.get("peak_pnl", 0.0),
+                        "bar_timestamp": bar_ts, "peak_pnl": meta.get("peak_pnl", 0.0),
                         "max_giveback_pct": args.max_giveback_pct, "qty": qty,
                     })
-                    session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
-                # objetivo diario
-                session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-                if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-                    session["halted"] = True
-                    print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+                _submit_and_refresh(ctx, symbol, "sell" if side == Side.LONG else "buy", qty,
+                                    "giveback_close", side, bar_ts)
                 return
 
         # Chequear OCO (stop/take) o señal de salida explícita
@@ -650,25 +905,14 @@ def trade_one_symbol(
             close_qty = abs(pos_qty) if pos_qty != 0 else qty
             if close_qty <= 0:
                 close_qty = meta.get("qty", 0)
-            if side == Side.LONG:
-                order = broker.place_order_market(symbol, "sell", close_qty)
-            else:
-                order = broker.place_order_market(symbol, "buy", close_qty)
-            pnl = (price - entry_px) * close_qty if side == Side.LONG else (entry_px - price) * close_qty
-            risk.record_close(symbol, side, close_qty, entry_px, meta.get("stop", 0.0), take, pnl)
-            position_book.pop(symbol, None)
-            print(f"✅ [{symbol}] Cierre -> qty={close_qty} pnl={pnl:.2f} | id={order.get('id','sin_id')}")
+            exit_kind = "stop_hit" if hit_stop else ("take_profit_hit" if hit_take else "signal_exit")
+            print(f"📤 [{symbol}] Cierre ({exit_kind}): orden de {close_qty} (P&L se contabiliza con el fill confirmado)")
             if session_logger is not None:
-                exit_kind = "stop_hit" if hit_stop else ("take_profit_hit" if hit_take else "signal_exit")
                 session_logger.position_management(symbol, "exit", {
-                    "bar_timestamp": bar_ts, "exit_kind": exit_kind, "pnl": pnl, "qty": close_qty,
+                    "bar_timestamp": bar_ts, "exit_kind": exit_kind, "qty": close_qty,
                 })
-                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
-            # objetivo diario
-            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-                session["halted"] = True
-                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+            _submit_and_refresh(ctx, symbol, "sell" if side == Side.LONG else "buy", close_qty,
+                                exit_kind, side, bar_ts)
             return
 
     # ---------- Circuit breakers: bloquean SOLO la apertura de posiciones nuevas ----------
@@ -691,29 +935,15 @@ def trade_one_symbol(
                 "low": df["low"].tolist(),
                 "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
             }
-            meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="(state) BUY",
-                                   session_logger=session_logger, signal="BUY", bar_timestamp=bar_ts)
-            if meta:
-                position_book[symbol] = meta
+            _open_position(ctx, symbol, Side.LONG, price, bars_dict, label="(state) BUY",
+                           signal="BUY", bar_timestamp=bar_ts)
         return
 
     if args.exit_when_below and pos_qty > 0 and ma_fast is not None and ma_slow is not None and ma_fast < ma_slow:
         if gate("SELL", "state_exit"):
             qty = pos_qty
-            broker.cancel_open_orders(symbol)
-            if session_logger is not None:
-                session_logger.order_submission(symbol=symbol, side="sell", requested_qty=qty, bar_timestamp=bar_ts)
-            order = broker.place_order_market(symbol, "sell", qty)
-            if session_logger is not None:
-                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
-            meta = position_book.pop(symbol, {"side": Side.LONG, "qty": qty, "entry": price})
-            pnl = (price - meta.get("entry", price)) * qty
-            risk.record_close(symbol, Side.LONG, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
-            print(f"✅ (state) SELL [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
-            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-                session["halted"] = True
-                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+            order = _submit_and_refresh(ctx, symbol, "sell", qty, "state_exit", Side.LONG, bar_ts, cancel_first=True)
+            print(f"📤 (state) SELL [{symbol}] x{qty} -> orden enviada id={order.get('id','sin_id')}")
         return
 
     if args.allow_shorts and args.enter_short_when_below and pos_qty == 0 and ma_fast is not None and ma_slow is not None and ma_fast < ma_slow:
@@ -726,29 +956,15 @@ def trade_one_symbol(
                 "low": df["low"].tolist(),
                 "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
             }
-            meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="(state) SHORT",
-                                   session_logger=session_logger, signal="SELL", bar_timestamp=bar_ts)
-            if meta:
-                position_book[symbol] = meta
+            _open_position(ctx, symbol, Side.SHORT, price, bars_dict, label="(state) SHORT",
+                           signal="SELL", bar_timestamp=bar_ts)
         return
 
     if args.allow_shorts and args.exit_short_when_above and pos_qty < 0 and ma_fast is not None and ma_slow is not None and ma_fast > ma_slow:
         if gate("BUY", "state_cover"):
             qty = abs(pos_qty)
-            broker.cancel_open_orders(symbol)
-            if session_logger is not None:
-                session_logger.order_submission(symbol=symbol, side="buy", requested_qty=qty, bar_timestamp=bar_ts)
-            order = broker.place_order_market(symbol, "buy", qty)
-            if session_logger is not None:
-                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
-            meta = position_book.pop(symbol, {"side": Side.SHORT, "qty": qty, "entry": price})
-            pnl = (meta.get("entry", price) - price) * qty
-            risk.record_close(symbol, Side.SHORT, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
-            print(f"✅ (state) COVER [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
-            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-                session["halted"] = True
-                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+            order = _submit_and_refresh(ctx, symbol, "buy", qty, "state_cover", Side.SHORT, bar_ts, cancel_first=True)
+            print(f"📤 (state) COVER [{symbol}] x{qty} -> orden enviada id={order.get('id','sin_id')}")
         return
 
     # ---------- Ejecución por señal clásica (ensemble/single) usando RiskManager ----------
@@ -765,27 +981,13 @@ def trade_one_symbol(
                     "low": df["low"].tolist(),
                     "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                 }
-                meta = _open_position(broker, risk, symbol, Side.LONG, price, bars_dict, label="BUY",
-                                       session_logger=session_logger, signal="BUY", bar_timestamp=bar_ts)
-                if meta:
-                    position_book[symbol] = meta
+                _open_position(ctx, symbol, Side.LONG, price, bars_dict, label="BUY",
+                               signal="BUY", bar_timestamp=bar_ts)
         elif gate("BUY", "signal_cover"):
             # BUY para cerrar short existente
             qty = abs(pos_qty)
-            broker.cancel_open_orders(symbol)
-            if session_logger is not None:
-                session_logger.order_submission(symbol=symbol, side="buy", requested_qty=qty, bar_timestamp=bar_ts)
-            order = broker.place_order_market(symbol, "buy", qty)
-            if session_logger is not None:
-                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
-            meta = position_book.pop(symbol, {"side": Side.SHORT, "qty": qty, "entry": price})
-            pnl = (meta.get("entry", price) - price) * qty
-            risk.record_close(symbol, Side.SHORT, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
-            print(f"✅ COVER [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
-            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-                session["halted"] = True
-                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+            order = _submit_and_refresh(ctx, symbol, "buy", qty, "signal_cover", Side.SHORT, bar_ts, cancel_first=True)
+            print(f"📤 COVER [{symbol}] x{qty} -> orden enviada id={order.get('id','sin_id')}")
 
     elif sig == "SELL":
         if pos_qty <= 0:
@@ -804,10 +1006,8 @@ def trade_one_symbol(
                             "low": df["low"].tolist(),
                             "volume": df["volume"].tolist() if "volume" in df.columns else [1_000_000] * len(df),
                         }
-                        meta = _open_position(broker, risk, symbol, Side.SHORT, price, bars_dict, label="SHORT",
-                                               session_logger=session_logger, signal="SELL", bar_timestamp=bar_ts)
-                        if meta:
-                            position_book[symbol] = meta
+                        _open_position(ctx, symbol, Side.SHORT, price, bars_dict, label="SHORT",
+                                       signal="SELL", bar_timestamp=bar_ts)
                 else:
                     msg = f"[{symbol}] Señal SELL pero shorts deshabilitados."
                     logger.info(msg)
@@ -815,20 +1015,8 @@ def trade_one_symbol(
         elif gate("SELL", "signal_exit"):
             # SELL para cerrar largo existente
             qty = pos_qty
-            broker.cancel_open_orders(symbol)
-            if session_logger is not None:
-                session_logger.order_submission(symbol=symbol, side="sell", requested_qty=qty, bar_timestamp=bar_ts)
-            order = broker.place_order_market(symbol, "sell", qty)
-            if session_logger is not None:
-                session_logger.order_result(symbol=symbol, order=order, bar_timestamp=bar_ts)
-            meta = position_book.pop(symbol, {"side": Side.LONG, "qty": qty, "entry": price})
-            pnl = (price - meta.get("entry", price)) * qty
-            risk.record_close(symbol, Side.LONG, qty, meta.get("entry", price), meta.get("stop", 0.0), meta.get("take"), pnl)
-            print(f"✅ SELL [{symbol}] x{qty} -> id={order.get('id','sin_id')}")
-            session["pnl_today"] = session.get("pnl_today", 0.0) + pnl
-            if args.daily_profit_halt > 0 and session["pnl_today"] >= args.daily_profit_halt:
-                session["halted"] = True
-                print(f"🧭 Objetivo diario alcanzado: +{session['pnl_today']:.2f}. Pausando nuevas entradas.")
+            order = _submit_and_refresh(ctx, symbol, "sell", qty, "signal_exit", Side.LONG, bar_ts, cancel_first=True)
+            print(f"📤 SELL [{symbol}] x{qty} -> orden enviada id={order.get('id','sin_id')}")
     else:
         msg = f"[{symbol}] Sin señal."
         logger.info(msg)
@@ -952,6 +1140,10 @@ def main(args: argparse.Namespace) -> None:
     # (símbolo, vela, lado). Viven toda la sesión (estado en memoria).
     guards = ExecutionGuards(args.timeframe)
 
+    # Órdenes enviadas aún sin estado final en Alpaca (solo en memoria; ver
+    # _finish_session para qué pasa si el proceso se detiene con alguna abierta).
+    orders = OrderTracker()
+
     logger.info(
         "Loop multi-símbolo: %s, tf=%s, lookback=%s, strategy=%s, hours_back=%s, allow_shorts=%s, ignore_clock=%s, ensemble_mode=%s",
         symbols, args.timeframe, args.lookback, args.strategy, args.hours_back, args.allow_shorts, args.ignore_clock, args.ensemble_mode
@@ -964,7 +1156,7 @@ def main(args: argparse.Namespace) -> None:
     end_reason = "loop_exit"
     try:
         _run_loop(args, symbols, broker, risk, strat, position_book, ensemble, wrappers,
-                  scale_out_levels, session, session_logger, guards)
+                  scale_out_levels, session, session_logger, guards, orders)
         end_reason = "manual_stop"
     except KeyboardInterrupt:
         logger.info("Bot detenido manualmente.")
@@ -974,13 +1166,28 @@ def main(args: argparse.Namespace) -> None:
         end_reason = f"exception:{type(e).__name__}"
         raise
     finally:
-        _finish_session(session_logger, end_reason)
+        _finish_session(session_logger, end_reason, orders)
 
 
-def _finish_session(session_logger: SessionLogger, reason: str) -> None:
-    """Escribe el único session_end (idempotente), imprime el resumen y cierra el JSONL."""
+def _finish_session(session_logger: SessionLogger, reason: str, orders: Optional[OrderTracker] = None) -> None:
+    """
+    Escribe el único session_end (idempotente), imprime el resumen y cierra el JSONL.
+
+    Órdenes aún abiertas al cerrar: NO se inventa ningún fill ni P&L. Se listan
+    en session_end.unresolved_orders para revisarlas en Alpaca. El seguimiento
+    no se persiste: tras reiniciar, reconcile_positions() ajusta cantidades a
+    la verdad del broker, pero el P&L de esos fills no entra en pnl_today.
+    """
+    extra = None
+    if orders is not None and len(orders):
+        pending = [o.summary() for o in orders.open_orders()]
+        extra = {"unresolved_orders": pending}
+        msg = (f"{len(pending)} orden(es) sin estado final al cerrar: no se contabiliza P&L por ellas. "
+               f"Revísalas en Alpaca: " + ", ".join(f"{o['symbol']} {o['purpose']} {o['order_id']}" for o in pending))
+        logger.warning(msg)
+        print(f"⚠️  {msg}")
     try:
-        summary = session_logger.session_end(reason)
+        summary = session_logger.session_end(reason, extra=extra)
         if summary is not None:
             print(format_summary(summary, reason))
     except Exception as e:
@@ -990,14 +1197,27 @@ def _finish_session(session_logger: SessionLogger, reason: str) -> None:
 
 
 def _run_loop(args, symbols, broker, risk, strat, position_book, ensemble, wrappers,
-              scale_out_levels, session, session_logger, guards) -> None:
-    """Loop principal (sin cambios de comportamiento). Retorna tras Ctrl+C."""
+              scale_out_levels, session, session_logger, guards, orders: Optional[OrderTracker] = None) -> None:
+    """
+    Loop principal. Retorna tras Ctrl+C.
+
+    El objetivo diario (session["halted"]) NO detiene el loop: solo bloquea
+    entradas nuevas (en _open_position). Stops, take-profit, trailing,
+    break-even, scale-outs, salidas y la reconciliación de órdenes siguen.
+    """
+    orders = orders if orders is not None else OrderTracker()
+    ctx = OrderContext(broker=broker, orders=orders, position_book=position_book, risk=risk, session=session,
+                       daily_profit_halt=float(args.daily_profit_halt or 0.0), session_logger=session_logger)
     while True:
         try:
+            # Fills diferidos: se reconcilian en cada pasada, también con el mercado cerrado.
+            if len(orders):
+                reconcile_pending_orders(ctx)
+                save_position_book(position_book)
+
             if session.get("halted"):
-                print("⏸️  Objetivo diario cumplido: pausa activa. Reanuda reiniciando o cambia --daily-profit-halt.")
-                time.sleep(30)
-                continue
+                print(f"⏸️  Objetivo diario cumplido (P&L confirmado +{session.get('pnl_today', 0.0):.2f}): "
+                      f"sin entradas nuevas; se siguen gestionando posiciones y órdenes abiertas.")
 
             market_open = broker.get_clock_is_open()
             if not market_open and not args.ignore_clock:
@@ -1028,6 +1248,7 @@ def _run_loop(args, symbols, broker, risk, strat, position_book, ensemble, wrapp
                         session_logger=session_logger,
                         guards=guards,
                         market_open=market_open,
+                        orders=orders,
                     )
                 except Exception as e_sym:
                     logger.exception(f"Error procesando [{sym}]: {e_sym}")
@@ -1136,7 +1357,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-giveback-pct", type=float, default=0.5,
                    help="Cierra si devuelve más de esta fracción (0–1) del PnL pico por trade.")
     p.add_argument("--daily-profit-halt", type=float, default=300.0,
-                   help="Pausa nuevas entradas al alcanzar este PnL realizado del día (USD).")
+                   help="Pausa nuevas entradas al alcanzar este PnL realizado del día (USD), calculado solo "
+                        "con fills confirmados por Alpaca. Las posiciones abiertas se siguen gestionando.")
     return p
 
 

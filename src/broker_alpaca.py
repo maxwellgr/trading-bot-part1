@@ -106,6 +106,12 @@ class BrokerAlpaca(BrokerBase):
         r.raise_for_status()
         return r.json()
 
+    def get_order(self, order_id: str) -> dict:
+        """Estado actual de una orden (solo lectura): status, filled_qty, filled_avg_price, filled_at…"""
+        r = requests.get(f"{self.base}/v2/orders/{order_id}", headers=_headers(), timeout=15)
+        r.raise_for_status()
+        return r.json()
+
     # NOTA: se eliminó place_order_bracket() — nunca se usaba (el bot gestiona
     # stop/trailing/take-profit por software vía risk_manager_avanzado.py y
     # el polling en run_paper.py, porque el trailing ATR es dinámico y no se
