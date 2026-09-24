@@ -35,7 +35,13 @@
 ```
 ├── src/
 │   ├── run_paper.py            # Main entry point (paper trading loop)
-│   ├── backtest.py             # CSV backtester (all 4 strategies)
+│   ├── backtest.py             # CLI: portfolio backtest v1 (--symbols) + legacy single-CSV backtester (--file)
+│   ├── backtest_engine.py      # Portfolio backtest engine (production strategy/risk, no look-ahead)
+│   ├── backtest_report.py      # Backtest metrics, daily results, equity/drawdown, CSV/JSON outputs
+│   ├── backtest_validation.py  # Replays a recorded paper session and compares signals/risk/lifecycle
+│   ├── sim_broker.py           # Simulated broker/portfolio (next-bar-open fills, slippage, commission)
+│   ├── historical_data.py      # Local historical bar loader + validation
+│   ├── historical_download.py  # Optional read-only IEX bar downloader with local CSV cache
 │   ├── strategy.py             # MACrossover, RSIStrategy, MACDStrategy, BollingerStrategy
 │   ├── ensemble.py             # Ensemble (consensus / weighted / stacked) + regime filters
 │   ├── risk_manager_avanzado.py # Advanced RiskManager (the one actually used) + RiskConfig
@@ -166,6 +172,37 @@ All of these are CLI flags on `run_paper.py` (run `--help` for the full, current
 
 ## 📈 Backtesting
 
+### Portfolio backtest v1 (current production strategy)
+
+Measures the **current** `run_paper.py` configuration — no strategy flags on purpose (v1 measures, it does not optimize).
+
+```bash
+# 1) one-time, read-only download into a local cache (GET market-data only, never orders)
+python -m src.historical_download --symbols NVDA,AMD,PLTR,HOOD,MARA,INTC,MU,META --timeframe 1Min --start 2026-05-28 --end 2026-09-23 --data-dir data/historical
+
+# 2) offline backtest
+python -m src.backtest --symbols NVDA,AMD,PLTR,HOOD,MARA,INTC,MU,META --timeframe 1Min --start 2026-06-01 --end 2026-09-23 --data-dir data/historical --output-dir data/backtests/baseline_v1
+
+# replay a recorded paper session and compare signals / risk decisions / lifecycle
+python -m src.backtest --validate-session logs/sessions/<session>.jsonl --data-dir data/historical
+```
+
+Options: `--initial-equity` (100000), `--slippage-bps` (5, the same cost the RiskManager assumes), `--commission` (USD per fill, 0), `--output-dir` (`trades.csv/json`, `daily_results.csv`, `equity_curve.csv`, `summary.json`), `--json`.
+
+**Timing / fill model (no look-ahead):** bars are stamped at their start; bar N is only known at its close (`ts + timeframe`), which is when the live bot evaluates it. Decisions use the window of bars up to and including N (last 120 bars within 24 h, like the live loop) and are only taken while the regular session is open at that moment (so the 15:59 bar is never acted on, the 09:29 bar is). Every order — entries, scale-outs, stops, take-profit, giveback and signal exits — fills at the **open of the next bar of that symbol** ± slippage. Stops/take-profit are checked on bar **closes** (the live bot's software stops only see closes); high/low are never used to invent intrabar fills. Realized P&L, the daily profit halt and the loss streak use only those simulated fills.
+
+**One portfolio, not N backtests:** all symbols share cash, equity, leverage, portfolio heat, the loss streak and the daily profit halt. Bars with the same timestamp are processed in `--symbols` order (the live loop order): all fills first, then marks, then decisions.
+
+**Reused from production:** `MACrossover` (via `build_strategy`), `RiskManager` (`assess_entry`, `update_trailing_stop`, `should_halt_trading`, `record_close`), the `AlpacaRiskAdapter` position view, `parse_scale_out`, the `run_paper` argument defaults and `build_risk_config`. **Simulated:** the position-management sequence of `trade_one_symbol` (trailing → break-even → scale-out → giveback → stop/take/signal exit), the broker, the market clock, and a daily reset (one bot session per trading day: `start_of_day()` and the daily P&L reset at the first decision of each day).
+
+**Known differences from paper trading:**
+* Fills: next-bar open + fixed bps vs. real market fills seconds after the decision. On the 2026-09-24 session replay the simulated fills were *more favorable* than Alpaca's real fills on all 5 legs ($0.14–$0.63/share; +$643.56 simulated vs +$436.78 real) — treat default-slippage results as optimistic.
+* Live polls every ~10 s can act on a still-forming or later-revised bar and re-evaluate the same bar right after an order is confirmed; the backtest evaluates each completed bar exactly once.
+* Positions are carried overnight with their local state; early-close days and `get_asset_tradable` are not modeled; IEX volume/bars are sparse (a missing next bar delays the fill — counted as `delayed fills`).
+* Not simulated in v1 (all off by default): ensemble mode, shorts and the `--enter/exit-*-when-*` state flags — the engine refuses such configs instead of approximating them.
+
+### Legacy single-CSV backtester
+
 ```bash
 python -m src.backtest --file data/AAPL_1min.csv --strategy macd \
     --fee 0.5 --slippage-bps 5 --allow-shorts
@@ -207,8 +244,8 @@ For transparency (this section will shrink over time as items get addressed):
 * **Fixed:** `RSIStrategy`, `MACDStrategy` and `BollingerStrategy` lacked the warm‑up guard `MACrossover` had, and raised `IndexError` on short input (this is exactly what happened extending the backtester to those strategies).
 * **Fixed:** the `weighted` ensemble mode vetoed a trade on any single dissenting vote regardless of weight, which contradicted the point of weighting.
 * **Fixed:** default Windows console encoding (`cp1252`) crashed the bot on its first emoji `print()`.
-* **Not yet integrated:** the backtester doesn't run the advanced RiskManager bar‑by‑bar (see [Backtesting](#-backtesting) above).
-* **Not yet implemented:** per‑tick reconciliation catches quantity drift and externally‑closed positions, but doesn't reconcile partial fills mid‑order (orders are assumed to fill fully at the last seen close price for PnL accounting — fine for paper trading, not accurate enough for real‑money accounting).
+* **Integrated:** the portfolio backtester (`python -m src.backtest --symbols ...`) runs the production strategy and RiskManager bar‑by‑bar on one shared portfolio; the legacy `--file` backtester still doesn't.
+* **Fixed:** realized P&L and the daily profit halt used to be estimated from bar prices; they now come only from fills confirmed by Alpaca, with partial fills accounted incrementally.
 
 ---
 

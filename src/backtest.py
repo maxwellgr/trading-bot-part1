@@ -138,7 +138,68 @@ def _infer_steps_per_year(df: pd.DataFrame) -> int:
     return 252  # diario
 
 
-if __name__ == "__main__":
+def portfolio_main(argv: List[str]) -> int:
+    """
+    Backtest de PORTAFOLIO con la estrategia y el riesgo ACTUALES de run_paper
+    (sin parámetros de estrategia a propósito: v1 mide, no optimiza).
+    Ver src/backtest_engine.py para el modelo temporal y de fills.
+    """
+    from pathlib import Path
+
+    from .backtest_engine import BacktestConfig, run_backtest
+    from .backtest_report import format_report, summarize, to_json, write_outputs
+    from .historical_data import HistoricalDataError, load_universe
+    from .historical_download import date_range_utc
+
+    p = argparse.ArgumentParser(
+        prog="python -m src.backtest",
+        description="Backtest de portafolio multi-símbolo con la config de producción de run_paper "
+                    "(datos locales; nunca envía órdenes). Para el backtester simple de un CSV usa --file.")
+    p.add_argument("--symbols", help="Lista separada por comas, en el orden del loop en vivo (desempate).")
+    p.add_argument("--timeframe", default="1Min")
+    p.add_argument("--start", help="Fecha NY inclusiva YYYY-MM-DD")
+    p.add_argument("--end", help="Fecha NY inclusiva YYYY-MM-DD")
+    p.add_argument("--data-dir", type=Path, default=Path("data") / "historical")
+    p.add_argument("--initial-equity", type=float, default=100_000.0)
+    p.add_argument("--commission", type=float, default=0.0, help="USD fijos por fill (0 = como Alpaca).")
+    p.add_argument("--slippage-bps", type=float, default=5.0,
+                   help="Slippage sobre la apertura de la vela de ejecución (default 5 bps = el que asume el RiskManager).")
+    p.add_argument("--output-dir", type=Path, help="Escribe trades.csv/json, daily_results.csv, equity_curve.csv, summary.json")
+    p.add_argument("--json", action="store_true", help="Resumen en JSON por stdout")
+    p.add_argument("--validate-session", type=Path, metavar="SESSION_JSONL",
+                   help="Reproduce la ventana de una sesión de paper grabada y compara señales/riesgo/ciclo de vida.")
+    a = p.parse_args(argv)
+
+    try:
+        if a.validate_session:
+            from .backtest_validation import format_validation, validate_session
+            v = validate_session(a.validate_session, a.data_dir, a.slippage_bps, a.commission)
+            print(to_json(v) if a.json else format_validation(v))
+            return 0
+        if not (a.symbols and a.start and a.end):
+            p.error("--symbols, --start y --end son obligatorios (o usa --validate-session / --file)")
+        symbols = [s.strip().upper() for s in a.symbols.split(",") if s.strip()]
+        s_utc, e_utc = date_range_utc(a.start, a.end)
+        # Velas previas al inicio solo como ventana de indicadores (en vivo: hasta 24 h hacia atrás).
+        data = load_universe(a.data_dir, a.timeframe, symbols, s_utc - pd.Timedelta(days=4), e_utc)
+    except HistoricalDataError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
+    cfg = BacktestConfig(symbols=symbols, timeframe=a.timeframe, start=a.start, end=a.end,
+                         initial_equity=a.initial_equity, slippage_bps=a.slippage_bps, commission=a.commission)
+    result = run_backtest(cfg, data.bars)
+    result.warnings.extend(data.warnings)
+    summary = summarize(result)
+    print(to_json(summary) if a.json else format_report(summary))
+    if a.output_dir:
+        paths = write_outputs(result, summary, a.output_dir)
+        if not a.json:
+            print()
+            print("Archivos: " + ", ".join(str(x) for x in paths))
+    return 0
+
+
+def legacy_main(argv: List[str]) -> None:
     parser = argparse.ArgumentParser(description="Backtester con métricas — soporta las mismas estrategias que run_paper.py")
     parser.add_argument("--file", required=True, help="CSV: timestamp, open, high, low, close, volume")
     parser.add_argument("--cash", type=float, default=10_000.0)
@@ -161,7 +222,7 @@ if __name__ == "__main__":
     parser.add_argument("--bb-window", type=int, default=20)
     parser.add_argument("--bb-k", type=float, default=2.0)
     parser.add_argument("--steps-per-year", type=int, default=0, help="Override de anualización (0 = inferir)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.strategy == "ma" and args.fast >= args.slow:
         print("❌ Para estrategia 'ma', fast debe ser menor que slow (ej. --fast 10 --slow 30).")
@@ -203,3 +264,15 @@ if __name__ == "__main__":
             "ruidosos o directamente engañosos. No tomes decisiones de riesgo sobre esto solo — "
             "usa un histórico más largo antes de fijar parámetros para paper/real."
         )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--file" in argv:
+        legacy_main(argv)
+        return 0
+    return portfolio_main(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

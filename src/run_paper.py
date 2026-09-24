@@ -1023,6 +1023,30 @@ def trade_one_symbol(
         print(msg)
 
 
+def build_risk_config(args: argparse.Namespace) -> RiskConfig:
+    """RiskConfig de producción a partir de los flags de run_paper. Compartido con el
+    backtester (src/backtest_engine.py) para que ambos usen exactamente la misma config."""
+    return RiskConfig(
+        account_risk_pct=args.risk_per_trade,
+        max_positions=args.max_positions,
+        max_positions_per_symbol=1,
+        max_portfolio_heat_pct=args.max_portfolio_heat,
+        max_leverage=args.max_leverage,
+        daily_loss_limit_pct=args.daily_loss_limit_pct,
+        max_consecutive_losses=args.max_consecutive_losses,
+        min_rr=args.min_rr,                 # más permisivo en rango; súbelo a 2.0 para tendencia
+        use_atr_based_stop=True,
+        atr_window=14,
+        atr_multiple_sl=args.atr_sl_mult,   # stop más ancho reduce tamaño y apalancamiento
+        atr_multiple_tp=args.atr_tp_mult,   # TP proporcional (RR ~1.5–2)
+        trailing_atr_multiple=args.trailing_atr_mult,
+        price_precision=2,
+        slippage_pct=0.0005,
+        min_liquidity_dollar=args.min_liquidity,
+        max_symbol_exposure_pct=args.max_symbol_exposure,
+    )
+
+
 # ---------------- Main ----------------
 def main(args: argparse.Namespace) -> None:
     symbols = parse_symbols(args.symbol, args.symbols)
@@ -1066,25 +1090,7 @@ def main(args: argparse.Namespace) -> None:
     # Config de riesgo avanzada (todos los parámetros son ajustables por CLI,
     # ver --help; los valores por defecto reproducen los que antes estaban
     # hardcodeados aquí).
-    cfg = RiskConfig(
-        account_risk_pct=args.risk_per_trade,
-        max_positions=args.max_positions,
-        max_positions_per_symbol=1,
-        max_portfolio_heat_pct=args.max_portfolio_heat,
-        max_leverage=args.max_leverage,
-        daily_loss_limit_pct=args.daily_loss_limit_pct,
-        max_consecutive_losses=args.max_consecutive_losses,
-        min_rr=args.min_rr,                 # más permisivo en rango; súbelo a 2.0 para tendencia
-        use_atr_based_stop=True,
-        atr_window=14,
-        atr_multiple_sl=args.atr_sl_mult,   # stop más ancho reduce tamaño y apalancamiento
-        atr_multiple_tp=args.atr_tp_mult,   # TP proporcional (RR ~1.5–2)
-        trailing_atr_multiple=args.trailing_atr_mult,
-        price_precision=2,
-        slippage_pct=0.0005,
-        min_liquidity_dollar=args.min_liquidity,
-        max_symbol_exposure_pct=args.max_symbol_exposure,
-    )
+    cfg = build_risk_config(args)
 
     risk = AdvancedRiskManager(cfg, AlpacaRiskAdapter(broker, position_book))
     risk.start_of_day()
