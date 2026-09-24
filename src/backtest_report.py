@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Sequence
 import pandas as pd
 
 from .backtest_engine import NY, BacktestResult
+from .backtest_entry_quality import (ROW_COLUMNS as _ENTRY_QUALITY_COLUMNS, entry_quality_rows,
+                                     entry_quality_summary, format_entry_quality)
 from .backtest_excursion import diagnostics, format_diagnostics
 
 
@@ -176,6 +178,7 @@ def summarize(result: BacktestResult) -> Dict[str, Any]:
             "delayed_fills": c["delayed_fills"],
         },
         "excursion": diagnostics(result.trades, result.config["symbols"]),
+        "entry_quality": entry_quality_summary(result.trades, c["risk"]["ACCEPT"]),
         "warnings": result.warnings,
     }
 
@@ -251,6 +254,8 @@ def format_report(s: Dict[str, Any]) -> str:
         L.append(f"\nNote: only {t['trades']} completed trades — metrics are statistically noisy.")
     if s.get("excursion") and t["trades"]:
         L += ["", format_diagnostics(s["excursion"])]
+    if s.get("entry_quality") and t["trades"]:
+        L += ["", format_entry_quality(s["entry_quality"])]
     return "\n".join(L)
 
 
@@ -327,7 +332,40 @@ def write_outputs(result: BacktestResult, summary: Dict[str, Any], out_dir: Path
     written.append(p)
 
     p = out_dir / "summary.json"
-    p.write_text(to_json(dict(summary, daily_results=rows, open_positions=result.open_positions,
+    core = {k: v for k, v in summary.items() if k != "entry_quality"}  # va aparte (entry_quality_summary.json)
+    p.write_text(to_json(dict(core, daily_results=rows, open_positions=result.open_positions,
                               unfilled_orders=result.unfilled_orders)), encoding="utf-8")
     written.append(p)
+    written += write_entry_quality(result, summary.get("entry_quality"), out_dir)
+    return written
+
+
+def _write_rows(path: Path, fields: List[str], rows: List[Dict[str, Any]]) -> Path:
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        w.writerows({k: r.get(k) for k in fields} for r in rows)
+    return path
+
+
+def write_entry_quality(result: BacktestResult, eq_summary: Optional[Dict[str, Any]], out_dir: Path) -> List[Path]:
+    """Diagnóstico de calidad de entrada: filas por trade (join por trade_id) + agregados. Solo lectura."""
+    rows = entry_quality_rows(result.trades)
+    eq_summary = eq_summary if eq_summary is not None else entry_quality_summary(result.trades)
+    written = [_write_rows(out_dir / "entry_quality.csv", _ENTRY_QUALITY_COLUMNS, rows)]
+    p = out_dir / "entry_quality.json"
+    p.write_text(to_json(rows), encoding="utf-8")
+    written.append(p)
+    p = out_dir / "entry_quality_summary.json"
+    p.write_text(to_json(eq_summary), encoding="utf-8")
+    written.append(p)
+    bucket_rows = [r for table in eq_summary.get("buckets", {}).values() for r in table]
+    written.append(_write_rows(out_dir / "entry_quality_buckets.csv",
+                               ["feature", "bucket", "lo", "hi", "trades", "win_rate_pct", "pct_reached_0_5r",
+                                "pct_reached_1r", "avg_realized_r", "median_realized_r", "avg_mfe_r", "avg_mae_r",
+                                "total_pnl"], bucket_rows))
+    written.append(_write_rows(out_dir / "entry_quality_crosstabs.csv",
+                               ["crosstab", "row_feature", "row_value", "col_feature", "col_value", "trades",
+                                "win_rate_pct", "pct_reached_0_5r", "pct_reached_1r", "avg_realized_r", "total_pnl"],
+                               eq_summary.get("crosstabs", [])))
     return written

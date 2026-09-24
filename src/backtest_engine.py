@@ -47,6 +47,7 @@ import numpy as np
 import pandas as pd
 
 from .analyze_session import timeframe_to_seconds
+from .backtest_entry_quality import entry_features
 from .backtest_excursion import excursion_fields, new_tracker, observe
 from .risk_manager_avanzado import RiskDecision, RiskManager, Side
 from .run_paper import AlpacaRiskAdapter, build_arg_parser, build_risk_config, build_strategy, parse_scale_out
@@ -94,6 +95,7 @@ class BacktestConfig:
     decision_start_utc: Optional[pd.Timestamp] = None  # ventana opcional (validación de sesiones)
     decision_end_utc: Optional[pd.Timestamp] = None
     record_evaluations: bool = False
+    entry_diagnostics: bool = True        # contexto de entrada (solo lectura; ver backtest_entry_quality.py)
 
 
 class SimRiskAdapter(AlpacaRiskAdapter):
@@ -352,7 +354,25 @@ class BacktestEngine:
             "entry_fill_timestamp": None, "entry_fill_price": None, "initial_qty": 0, "max_qty": 0,
             "entry_commission": 0.0, "legs": [], "_excursion": new_tracker(),
         }
+        if self.cfg.entry_diagnostics:
+            self.open_trades[sd.name]["entry_context"] = self._entry_context(sd, i, decision)
         self.sim.submit(sd.name, "buy", decision.qty, "entry", sd.iso[i], sd.decision_iso[i])
+
+    def _entry_context(self, sd: _Sym, i: int, decision: RiskDecision) -> Dict[str, Any]:
+        """Diagnóstico de calidad de entrada: vistas de SOLO LECTURA que terminan en la vela de señal
+        (las velas futuras no llegan). No toca decisión, orden, stops ni P&L."""
+        def upto(arr: np.ndarray) -> np.ndarray:
+            view = arr[:i + 1].view()
+            view.flags.writeable = False
+            return view
+
+        a = self.args
+        ctx = entry_features(upto(sd.ts_ns), upto(sd.open), upto(sd.high), upto(sd.low), upto(sd.close),
+                             upto(sd.volume), strategy_window_start=max(int(sd.window_lo[i]), i + 1 - a.lookback),
+                             fast=a.fast, slow=a.slow, atr_window=self.risk_cfg.atr_window, tf_seconds=self.tf_seconds)
+        meta = decision.meta or {}
+        ctx.update(risk_atr=meta.get("atr"), risk_liquidity_dollar=meta.get("liq"), risk_rr=meta.get("rr"))
+        return ctx
 
     def _manage(self, sd: _Sym, i: int, sig: Optional[str], price: float, bd: Dict[str, list]) -> None:
         """Espejo de la gestión de posición abierta de trade_one_symbol (largos)."""

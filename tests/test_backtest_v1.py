@@ -403,7 +403,9 @@ def test_summary_per_symbol_daily_results_and_outputs(tmp_path):
     assert "BACKTEST SUMMARY" in format_report(s)
     json.loads(to_json(s))
     names = {p.name for p in write_outputs(r, s, tmp_path)}
-    assert names == {"trades.csv", "trades.json", "daily_results.csv", "equity_curve.csv", "summary.json"}
+    assert names == {"trades.csv", "trades.json", "daily_results.csv", "equity_curve.csv", "summary.json",
+                     "entry_quality.csv", "entry_quality.json", "entry_quality_summary.json",
+                     "entry_quality_buckets.csv", "entry_quality_crosstabs.csv"}
 
 
 # ---------------------------------------------------------------- reproducibilidad / config
