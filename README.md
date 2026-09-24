@@ -214,6 +214,42 @@ Supports `--strategy {ma,rsi,macd,bbands}` with the same parameters as `run_pape
 
 ---
 
+## 🔬 Research protocol (v1)
+
+Strategy research follows `config/research_protocol_v1.json` (validated by `src/research_protocol.py`). Results from different splits are **separate evidence classes** and are never combined into a single score.
+
+| Split | Dates (NY) | Role | May be used for |
+|---|---|---|---|
+| warmup | 2023-12-01 → 2023-12-31 | data support | indicator warm-up only |
+| development | 2024-01-02 → 2025-12-31 | development | forming and tuning hypotheses |
+| validation | 2026-01-02 → 2026-05-29 | validation | **one** look per **frozen** strategy version |
+| known_diagnostic | 2026-06-01 → 2026-09-23 | **contaminated** | diagnostics / benchmark reference only |
+| forward | 2026-09-24 → | forward | chronological paper/live observations |
+
+**Why 2026-06-01 → 2026-09-23 is contaminated:** it was used to build and inspect the backtester, fill accounting, MFE/MAE, Entry Quality and Execution Sensitivity. Its results have already shaped our understanding, so it can never again be treated as untouched out-of-sample data.
+
+**Hygiene rules:**
+- Never tune on validation after viewing it.
+- If parameters change after validation was viewed, create a new strategy version. Validation is then contaminated for that version.
+- Forward observations stay chronological.
+- Never pick symbols by their validation performance.
+- Never rerun validation repeatedly while tweaking.
+
+Versions are recorded in `research/strategy_registry_v1.json`. The benchmark is `MA_BASELINE_V1` (MA 3/7 with production risk settings); candidates are `STRATEGY_V2_HYPOTHESIS_NNN`. Every study is appended to `research/research_log.md`.
+
+**Data:** Alpaca v2 bars, `feed=iex`, `adjustment=raw`. Prices are **not split-adjusted**: the NVDA 10:1 split on 2024-06-10 is a raw discontinuity. Timestamps are UTC bar starts, and extended-hours bars are included. IEX bars are trade-based, so missing minutes are expected and never filled in.
+
+```bash
+# extend history without rewriting any cached bar
+python -m src.historical_download --symbols NVDA,AMD,PLTR,HOOD,MARA,INTC,MU,META --timeframe 1Min --start 2023-12-01 --end 2026-05-27 --data-dir data/historical --keep-existing
+# read-only integrity/coverage audit + SHA-256 manifest
+python -m src.historical_audit --data-dir data/historical --protocol config/research_protocol_v1.json --output-dir data/research_v1
+# MA_BASELINE_V1 benchmark per split (no optimization)
+python -m src.research_benchmark --protocol config/research_protocol_v1.json --data-dir data/historical --output-dir data/research_v1 --periods development,validation,known_diagnostic --reuse known_diagnostic=data/backtests/baseline_v1_entry_quality
+```
+
+---
+
 ## ⚙️ Operations, State & Graceful Shutdown
 
 * Orders are placed via `BrokerAlpaca` (market orders only — no native bracket orders; stops/trailing/take‑profit/scale‑outs are all managed by the bot's own polling loop, since ATR trailing is dynamic and can't be expressed as a static bracket order).

@@ -1,0 +1,149 @@
+{
+  "manifest_version": "historical_manifest_v1",
+  "generated_at": "2026-09-24T17:21:39+00:00",
+  "data_dir": "data\\historical",
+  "timeframe": "1Min",
+  "source": {
+    "provider": "Alpaca Market Data API v2",
+    "endpoint": "GET https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+    "feed": "iex",
+    "feed_evidence": "feed=iex is sent explicitly by src/historical_download.py and by the live src/broker_alpaca.py.",
+    "adjustment": "raw",
+    "adjustment_evidence": "Sent explicitly as adjustment=raw. Verified 2026-09-24: NVDA 2024-06-07 bars are ~1190 USD raw vs ~118.6 with adjustment=split, so stored prices and volumes are NOT split-adjusted (NVDA 10:1 split on 2024-06-10 is a raw discontinuity).",
+    "sessions": "All bars returned by the API are stored, including pre-market and after-hours. The strategy only decides when the decision instant is inside 09:30-16:00 America/New_York.",
+    "timestamps": "UTC, ISO-8601 with Z; each timestamp is the bar START (a 1Min bar at 13:35Z covers [13:35, 13:36)).",
+    "missing_minutes": "IEX bars are trade-based: a minute with no IEX trade has no bar. Missing minutes are expected and are never filled or invented.",
+    "plan_notes": "Rate limit header reports 200 requests/min. A probe on 2026-09-24 also returned SIP bars for 2023-12-01, but SIP is not used because the live bot trades on IEX data.",
+    "known_feed_gaps": [
+      {
+        "date": "2025-03-10",
+        "scope": "all 8 symbols",
+        "issue": "no IEX bars for a regular trading day",
+        "evidence": "2026-09-24 probe: NVDA IEX 0 bars, SIP 960 bars (04:00-19:59 ET)",
+        "handling": "left as a gap; nothing fabricated"
+      },
+      {
+        "date": "2024-12-23",
+        "scope": "all 8 symbols",
+        "issue": "IEX bars stop at 10:21-10:22 ET",
+        "evidence": "2026-09-24 probe: NVDA IEX 72 bars (08:02-10:22 ET), SIP 900 bars (04:00-18:59 ET)",
+        "handling": "left as a partial session; nothing fabricated"
+      }
+    ],
+    "extended_hours_note": "Extended-hours IEX bars are sparse throughout (median 0-8 per symbol per day) and nearly absent before 2025-02 (monthly median 0)."
+  },
+  "requested_research_period": {
+    "start": "2023-12-01",
+    "end_of_backtest_splits": "2026-09-23",
+    "protocol_version": "research_protocol_v1"
+  },
+  "actual_available_period": {
+    "all_symbols_from": "2023-12-01T14:30:00+00:00",
+    "all_symbols_until": "2026-09-24T14:53:00+00:00",
+    "first_common_trading_date": "2023-12-01",
+    "last_common_trading_date": "2026-09-24"
+  },
+  "files": [
+    {
+      "filename": "1Min/NVDA.csv",
+      "symbol": "NVDA",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 276007,
+      "file_size_bytes": 16758804,
+      "sha256": "1795cec9f644c228380cfc2002a9525e8c92e9052789da2b647d8ae1a8becd4a"
+    },
+    {
+      "filename": "1Min/AMD.csv",
+      "symbol": "AMD",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 266569,
+      "file_size_bytes": 15677388,
+      "sha256": "f9ef26d1955ad1b86dd5641b68743917aae810d48e46d11cabcaed47a57ab0de"
+    },
+    {
+      "filename": "1Min/PLTR.csv",
+      "symbol": "PLTR",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 267410,
+      "file_size_bytes": 15644262,
+      "sha256": "16ee3ab36d2ca87c9df55b5b5a0d8c036411e739e3059d40b07689f0903858d1"
+    },
+    {
+      "filename": "1Min/HOOD.csv",
+      "symbol": "HOOD",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 250338,
+      "file_size_bytes": 14371154,
+      "sha256": "5b58421545aa5affcb5bdef1f8220a5d097dde2bb5532e93f2586bf2ced0e4c9"
+    },
+    {
+      "filename": "1Min/MARA.csv",
+      "symbol": "MARA",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 267893,
+      "file_size_bytes": 15046430,
+      "sha256": "7903405bd0e4a1a4dd85b1204cd5df38ae1630be99e2b621e97bd1bac3d85f0a"
+    },
+    {
+      "filename": "1Min/INTC.csv",
+      "symbol": "INTC",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 275412,
+      "file_size_bytes": 15861097,
+      "sha256": "6c4cc425dea81e4e5cff3d9ea618ee24e5ca15f256825ef97b1e1c618dee5c0b"
+    },
+    {
+      "filename": "1Min/MU.csv",
+      "symbol": "MU",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 261713,
+      "file_size_bytes": 14910227,
+      "sha256": "ec5309fa684e3925615d8c2ffbafc72b6d86107fe1ca12cdd11463061e0183c2"
+    },
+    {
+      "filename": "1Min/META.csv",
+      "symbol": "META",
+      "timeframe": "1Min",
+      "first_timestamp": "2023-12-01T14:30:00+00:00",
+      "last_timestamp": "2026-09-24T14:53:00+00:00",
+      "row_count": 242647,
+      "file_size_bytes": 14512239,
+      "sha256": "8d453b2e18970416b33aff38bc73ad44529466ca7ece13b850f82495424b4206"
+    }
+  ],
+  "audit_warnings": [
+    "NVDA: RTH open 2024-06-10 vs prior close -90.0% (prev/open ratio 10.042; unadjusted split or data error (feed stored raw))",
+    "NVDA: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "NVDA: 2 sparse RTH date(s) (< 50% coverage)",
+    "AMD: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "AMD: 2 sparse RTH date(s) (< 50% coverage)",
+    "PLTR: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "PLTR: 2 sparse RTH date(s) (< 50% coverage)",
+    "HOOD: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "HOOD: 4 sparse RTH date(s) (< 50% coverage)",
+    "MARA: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "MARA: 2 sparse RTH date(s) (< 50% coverage)",
+    "INTC: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "INTC: 2 sparse RTH date(s) (< 50% coverage)",
+    "MU: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "MU: 2 sparse RTH date(s) (< 50% coverage)",
+    "META: weekday(s) without bars that are not NYSE holidays: ['2025-03-10']",
+    "META: 4 sparse RTH date(s) (< 50% coverage)",
+    "2024-12-23: activity after 13:00 collapsed on all symbols but date is not in EARLY_CLOSES",
+    "2026-09-24: activity after 13:00 collapsed on all symbols but date is not in EARLY_CLOSES"
+  ]
+}

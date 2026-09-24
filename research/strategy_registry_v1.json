@@ -1,0 +1,97 @@
+{
+  "registry_version": "strategy_registry_v1",
+  "protocol": "config/research_protocol_v1.json",
+  "naming": {
+    "benchmark": "MA_BASELINE_V1",
+    "future_candidates": "STRATEGY_V2_HYPOTHESIS_NNN (zero-padded, never reused; a parameter change after a validation look = new ID)"
+  },
+  "entry_schema": {
+    "id": "string, unique",
+    "status": "draft | frozen | validated | rejected | retired",
+    "description": "what the hypothesis is and why (written BEFORE looking at validation)",
+    "code_commit": "git commit hash of the exact code evaluated (clean tree)",
+    "parameters": "object: every parameter that differs from production defaults, plus the ones under test",
+    "development_result": "reference to output file + headline metrics (DEVELOPMENT EVIDENCE)",
+    "frozen_date": "YYYY-MM-DD: date code + parameters were frozen; required before any validation look",
+    "validation_viewed_at": "ISO timestamp of the single validation look, or null",
+    "validation_viewed_before_parameter_changes": "bool: true means parameters were changed after viewing validation -> this ID's validation is contaminated",
+    "validation_result": "reference + headline metrics (VALIDATION EVIDENCE), or null",
+    "known_period_result": "optional reference (KNOWN/CONTAMINATED EVIDENCE; never used for selection)",
+    "forward_notes": "chronological paper/live observations (FORWARD EVIDENCE)",
+    "notes": "free text"
+  },
+  "entries": [
+    {
+      "id": "MA_BASELINE_V1",
+      "status": "frozen",
+      "description": "Current production strategy: MA crossover fast=3 / slow=7 with production risk management (run_paper defaults). Benchmark only; not a candidate.",
+      "code_commit": "63667b8 (strategy/risk code unchanged since before the backtester; see research/research_log.md)",
+      "parameters": {
+        "strategy": "ma",
+        "fast": 3,
+        "slow": 7,
+        "lookback": 120,
+        "hours_back": 24,
+        "risk_per_trade": 0.005,
+        "min_rr": 1.3,
+        "atr_sl_mult": 2.0,
+        "atr_tp_mult": 3.0,
+        "trailing_atr_mult": 1.5,
+        "max_positions": 4,
+        "max_leverage": 1.5,
+        "max_portfolio_heat": 0.2,
+        "max_symbol_exposure": 0.1,
+        "min_liquidity": 200000.0,
+        "daily_loss_limit_pct": 0.03,
+        "max_consecutive_losses": 3,
+        "be_at_r": 1.0,
+        "scale_out": "1.0:0.5,2.0:0.5",
+        "max_giveback_pct": 0.5,
+        "daily_profit_halt": 300.0,
+        "allow_shorts": false,
+        "ensemble_mode": "off"
+      },
+      "frozen_date": "2026-09-24",
+      "development_result": {
+        "ref": "data/research_v1/benchmark_periods.json#development",
+        "start": "2024-01-02",
+        "end": "2025-12-31",
+        "trades": 2592,
+        "win_rate_pct": 34.79938271604938,
+        "realized_pnl": -72363.29924000034,
+        "expectancy_r": -0.10512081460697886,
+        "profit_factor": 0.6360552012885041,
+        "total_r": -272.47315146128926,
+        "max_drawdown_pct": -72.45435959786548
+      },
+      "validation_viewed_at": "2026-09-24T17:28:11+00:00",
+      "validation_viewed_before_parameter_changes": false,
+      "validation_result": {
+        "ref": "data/research_v1/benchmark_periods.json#validation",
+        "start": "2026-01-02",
+        "end": "2026-05-29",
+        "trades": 661,
+        "win_rate_pct": 32.9803328290469,
+        "realized_pnl": -31038.28881749995,
+        "expectancy_r": -0.11851447027771335,
+        "profit_factor": 0.6016330528635487,
+        "total_r": -78.33806485356853,
+        "max_drawdown_pct": -32.29065728568325
+      },
+      "known_period_result": {
+        "ref": "data/backtests/baseline_v1_entry_quality",
+        "start": "2026-06-01",
+        "end": "2026-09-23",
+        "trades": 544,
+        "win_rate_pct": 34.92647058823529,
+        "realized_pnl": -24033.317342499828,
+        "expectancy_r": -0.10687517866994192,
+        "profit_factor": 0.6513546757540386,
+        "total_r": -58.14009719644834,
+        "max_drawdown_pct": -24.50121799271432
+      },
+      "forward_notes": [],
+      "notes": "Parameters were set before this protocol existed and have not been changed by any research step."
+    }
+  ]
+}

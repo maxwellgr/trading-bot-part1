@@ -1,0 +1,90 @@
+{
+  "protocol_version": "research_protocol_v1",
+  "created": "2026-09-24",
+  "universe": {
+    "symbols": ["NVDA", "AMD", "PLTR", "HOOD", "MARA", "INTC", "MU", "META"],
+    "timeframe": "1Min",
+    "symbol_order_note": "Order is the live loop order and the same-timestamp tie-break in the backtester."
+  },
+  "data_source": {
+    "provider": "Alpaca Market Data API v2",
+    "endpoint": "GET https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+    "feed": "iex",
+    "feed_evidence": "feed=iex is sent explicitly by src/historical_download.py and by the live src/broker_alpaca.py.",
+    "adjustment": "raw",
+    "adjustment_evidence": "Sent explicitly as adjustment=raw. Verified 2026-09-24: NVDA 2024-06-07 bars are ~1190 USD raw vs ~118.6 with adjustment=split, so stored prices and volumes are NOT split-adjusted (NVDA 10:1 split on 2024-06-10 is a raw discontinuity).",
+    "sessions": "All bars returned by the API are stored, including pre-market and after-hours. The strategy only decides when the decision instant is inside 09:30-16:00 America/New_York.",
+    "timestamps": "UTC, ISO-8601 with Z; each timestamp is the bar START (a 1Min bar at 13:35Z covers [13:35, 13:36)).",
+    "missing_minutes": "IEX bars are trade-based: a minute with no IEX trade has no bar. Missing minutes are expected and are never filled or invented.",
+    "plan_notes": "Rate limit header reports 200 requests/min. A probe on 2026-09-24 also returned SIP bars for 2023-12-01, but SIP is not used because the live bot trades on IEX data.",
+    "known_feed_gaps": [
+      {"date": "2025-03-10", "scope": "all 8 symbols", "issue": "no IEX bars for a regular trading day", "evidence": "2026-09-24 probe: NVDA IEX 0 bars, SIP 960 bars (04:00-19:59 ET)", "handling": "left as a gap; nothing fabricated"},
+      {"date": "2024-12-23", "scope": "all 8 symbols", "issue": "IEX bars stop at 10:21-10:22 ET", "evidence": "2026-09-24 probe: NVDA IEX 72 bars (08:02-10:22 ET), SIP 900 bars (04:00-18:59 ET)", "handling": "left as a partial session; nothing fabricated"}
+    ],
+    "extended_hours_note": "Extended-hours IEX bars are sparse throughout (median 0-8 per symbol per day) and nearly absent before 2025-02 (monthly median 0)."
+  },
+  "splits": [
+    {
+      "name": "warmup",
+      "role": "data_support",
+      "start": "2023-12-01",
+      "end": "2023-12-31",
+      "purpose": "Indicator warm-up and data support only. No results are reported for this window."
+    },
+    {
+      "name": "development",
+      "role": "development",
+      "start": "2024-01-02",
+      "end": "2025-12-31",
+      "purpose": "May be used to form and tune hypotheses."
+    },
+    {
+      "name": "validation",
+      "role": "validation",
+      "start": "2026-01-02",
+      "end": "2026-05-29",
+      "purpose": "May be used only after a strategy version and its parameters are frozen. One look per frozen version."
+    },
+    {
+      "name": "known_diagnostic",
+      "role": "contaminated",
+      "start": "2026-06-01",
+      "end": "2026-09-23",
+      "purpose": "Known diagnostic period. Already examined extensively; never untouched out-of-sample data."
+    },
+    {
+      "name": "forward",
+      "role": "forward",
+      "start": "2026-09-24",
+      "end": null,
+      "purpose": "Chronological paper/live observations only, recorded as they occur."
+    }
+  ],
+  "execution_defaults": {
+    "fill_model": "next_bar_open",
+    "slippage_bps": 5.0,
+    "commission_per_fill": 0.0,
+    "initial_equity": 100000.0
+  },
+  "benchmark_strategy": {
+    "id": "MA_BASELINE_V1",
+    "strategy": "ma",
+    "fast": 3,
+    "slow": 7,
+    "parameters_source": "Exact run_paper defaults (build_arg_parser with no flags); see config/strategy_versions_v1.json."
+  },
+  "contamination_notes": [
+    "2026-06-01 -> 2026-09-23 was used to build and validate the portfolio backtester, confirmed-fill accounting, MFE/MAE diagnostics, Entry Quality Diagnostics v1 and Execution Sensitivity v1.",
+    "Its results (e.g. 544 trades, PF 0.65, negative even at 0 bps) have shaped our understanding of the system, so any model selected after seeing them is implicitly fit to this window.",
+    "It may be used for diagnostics and as a benchmark reference, but MUST NOT be described or used as validation or untouched out-of-sample data."
+  ],
+  "hygiene_rules": [
+    "Never tune on validation after viewing validation results.",
+    "If parameters change after validation was viewed, create a new strategy version; validation is contaminated for that version.",
+    "The known diagnostic period remains contaminated permanently.",
+    "Forward paper observations must remain chronological and are never back-filled or re-selected.",
+    "Do not select symbols because they performed well in validation.",
+    "Do not repeatedly rerun validation while tweaking parameters.",
+    "Report development, validation, contaminated and forward evidence separately; never merge them into one score."
+  ]
+}
