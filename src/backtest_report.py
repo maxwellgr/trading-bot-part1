@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import pandas as pd
 
 from .backtest_engine import NY, BacktestResult
+from .backtest_excursion import diagnostics, format_diagnostics
 
 
 # ---------------- métricas básicas ----------------
@@ -174,6 +175,7 @@ def summarize(result: BacktestResult) -> Dict[str, Any]:
             "completed_trade_exit_reasons": _count(t["exit_reason"] for t in result.trades),
             "delayed_fills": c["delayed_fills"],
         },
+        "excursion": diagnostics(result.trades, result.config["symbols"]),
         "warnings": result.warnings,
     }
 
@@ -247,6 +249,8 @@ def format_report(s: Dict[str, Any]) -> str:
         L.append(f"WARNING: {w}")
     if t["trades"] < 30:
         L.append(f"\nNote: only {t['trades']} completed trades — metrics are statistically noisy.")
+    if s.get("excursion") and t["trades"]:
+        L += ["", format_diagnostics(s["excursion"])]
     return "\n".join(L)
 
 
@@ -275,7 +279,14 @@ def to_json(obj: Any) -> str:
 _TRADE_COLUMNS = ["trade_id", "symbol", "side", "entry_signal_timestamp", "entry_decision_timestamp",
                   "entry_fill_timestamp", "entry_fill_price", "modeled_entry", "initial_stop", "initial_take",
                   "initial_qty", "max_qty", "exit_fill_timestamp", "exit_fill_price", "exit_reason", "scale_outs",
-                  "realized_pnl", "realized_r", "commission", "holding_seconds", "result"]
+                  "realized_pnl", "realized_r", "commission", "holding_seconds", "result",
+                  # diagnóstico MFE/MAE (cierres de vela; ver backtest_excursion.py)
+                  "excursion_bars", "mfe_dollars_per_share", "mae_dollars_per_share", "mfe_pct", "mae_pct",
+                  "mfe_r", "mae_r", "mfe_timestamp", "mae_timestamp", "minutes_to_mfe", "minutes_to_mae",
+                  "mae_before_mfe", "reached_0_5r", "reached_1_0r", "reached_1_5r", "reached_2_0r",
+                  "exit_efficiency", "realized_vs_mfe_r", "mfe_left_on_table_r", "excursion_class",
+                  "intrabar_mfe_dollars_per_share_diag", "intrabar_mae_dollars_per_share_diag",
+                  "intrabar_mfe_r_diag", "intrabar_mae_r_diag"]
 
 
 def write_outputs(result: BacktestResult, summary: Dict[str, Any], out_dir: Path) -> List[Path]:

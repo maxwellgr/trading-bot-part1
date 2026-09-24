@@ -47,6 +47,7 @@ import numpy as np
 import pandas as pd
 
 from .analyze_session import timeframe_to_seconds
+from .backtest_excursion import excursion_fields, new_tracker, observe
 from .risk_manager_avanzado import RiskDecision, RiskManager, Side
 from .run_paper import AlpacaRiskAdapter, build_arg_parser, build_risk_config, build_strategy, parse_scale_out
 from .sim_broker import SimBroker, SimFill
@@ -245,6 +246,7 @@ class BacktestEngine:
                         self._on_fill(fill, sd, i)
             for sd, i in group:                       # b) marca al cierre
                 self.sim.mark(sd.name, sd.close[i])
+                self._observe_excursion(sd, i)        #    diagnóstico MFE/MAE (solo lectura)
             for sd, i in group:                       # c) decisiones
                 if sd.decision_ok[i]:
                     self._roll_day(sd.decision_date[i])
@@ -254,6 +256,14 @@ class BacktestEngine:
             if (start_date is None or d0 >= start_date) and (end_date is None or d0 <= end_date):
                 self.equity_curve.append((sd0.decision_iso[i0], self.sim.equity()))
         return self._result()
+
+    def _observe_excursion(self, sd: _Sym, i: int) -> None:
+        """MFE/MAE: registra el cierre de esta vela si el trade tenía acciones a ese cierre
+        (la vela del fill de entrada cuenta; la del fill de salida final no, porque abre ya
+        sin posición). Solo mide: no toca órdenes, stops ni P&L."""
+        trade = self.open_trades.get(sd.name)
+        if trade is not None and trade["entry_fill_price"] is not None and self.sim.position_qty(sd.name) > 0:
+            observe(trade["_excursion"], float(sd.close[i]), float(sd.high[i]), float(sd.low[i]), sd.decision_iso[i])
 
     def _delay(self, decision_iso: str, fill_iso: str) -> float:
         return (pd.Timestamp(fill_iso) - pd.Timestamp(decision_iso)).total_seconds()
@@ -340,7 +350,7 @@ class BacktestEngine:
             "modeled_entry": entry, "initial_stop": decision.stop, "initial_take": decision.take_profit,
             "risk_per_share_modeled": risk_ps, "requested_qty": decision.qty,
             "entry_fill_timestamp": None, "entry_fill_price": None, "initial_qty": 0, "max_qty": 0,
-            "entry_commission": 0.0, "legs": [],
+            "entry_commission": 0.0, "legs": [], "_excursion": new_tracker(),
         }
         self.sim.submit(sd.name, "buy", decision.qty, "entry", sd.iso[i], sd.decision_iso[i])
 
@@ -451,6 +461,7 @@ class BacktestEngine:
         t["realized_r"] = pnl_total / initial_risk if initial_risk > 0 else None
         t["holding_seconds"] = (pd.Timestamp(t["exit_fill_timestamp"]) - pd.Timestamp(t["entry_fill_timestamp"])).total_seconds()
         t["result"] = "win" if pnl_total > BREAKEVEN_EPS else ("loss" if pnl_total < -BREAKEVEN_EPS else "breakeven")
+        t.update(excursion_fields(t, t.pop("_excursion", None)))
         return t
 
     # ---------------- resultado ----------------
@@ -464,7 +475,8 @@ class BacktestEngine:
                 open_positions.append({"symbol": sym, "qty": qty, "cost_basis": basis, "last_close": last,
                                        "unrealized_pnl": (last - basis) * qty,
                                        "realized_pnl_so_far": meta.get("realized_pnl", 0.0),
-                                       "trade": self.open_trades.get(sym)})
+                                       "trade": {k: v for k, v in (self.open_trades.get(sym) or {}).items()
+                                                 if k != "_excursion"}})
         unfilled = [{"symbol": o.symbol, "side": o.side, "qty": o.qty, "purpose": o.purpose,
                      "signal_bar_timestamp": o.signal_bar_ts, "decision_timestamp": o.decision_ts}
                     for o in self.sim.pending_orders()]
