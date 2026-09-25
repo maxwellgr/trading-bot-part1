@@ -308,3 +308,29 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 
 - **Outcome:** progression to validation **FAIL**, so H003 is REJECTED_AT_DEVELOPMENT. Validation, known and forward were never run. Any follow-up is H004.
 - **Strategy behavior changed:** No live behavior changed.
+
+## 2026-09-25 — Shared trade-management autopsy, H001 vs H003 (DEVELOPMENT, diagnostic only)
+
+- **Question:** Do H001 and H003 lose through the same management mechanics, and how much stop damage comes from close-based detection and next-bar execution?
+- **Scope and checks:**
+  - DEVELOPMENT only; bars loaded to 2025-12-31.
+  - Both reruns were byte-identical to their stored runs (trades.csv, trades.json, daily_results.csv, equity_curve.csv; summary.json equal).
+  - Read-only exit observer; no shared code changed.
+- **Results (DEVELOPMENT EVIDENCE):**
+  - **Signature (H001 / H003):**
+    - expectancy −0.059 / −0.061R; PF 0.795 / 0.791; win 41.2 / 41.4%;
+    - median MFE +0.235 / +0.228R; reach +0.25R 48.6 / 48.7%;
+    - immediate failures 46.9 / 46.8%; stop share 21.1 / 19.5%, stop average −1.05 / −1.06R;
+    - giveback share 75 / 77%, capturing 0.30 / 0.29 of MFE;
+    - median hold 25 / 25 min; cost 0.100 / 0.103R;
+    - geometry identical (stop 2.00 ATR, take profit 3.00 ATR, approximate RR 1.38, ATR% ≈ 0.49–0.50).
+  - **Stops:** 98.6 / 95.7% never reached +0.25R; median MFE −0.18 / −0.16R.
+    - 66 / 70% had a trailing stop tighter than the initial stop (median stop level −0.86 / −0.82R from the fill).
+    - Median path from stop level to realized: the close was 0.11R through the stop at detection, then the next-open fill cost 0.04R more, for about −1.02R realized.
+    - Detection-to-fill latency cost: median −0.044 / −0.042R; −$6,262 / −$4,728 in total, about 4.5% of stop P&L.
+    - Loss beyond −1R: −$20,500 / −$20,049.
+  - **Post-stop (future information; not a rule):** within 60 minutes, 79 / 78% closed below the actual exit, 20 / 23% recovered above entry, and 5 / 4% reached +1R.
+  - **Lifecycle:** immediate failures (MFE < +0.25R and a loss) totalled −$169,721 / −$140,022. All other buckets combined were positive: +$131,708 / +$107,315.
+  - **Differences:** H003 reached +1R less often (13.4 vs 16.1%), reached +0.25R later (15 vs 10 min), and took fewer take profits (3.1 vs 3.9%). Overnight: 41 trades at +0.855R (H001) vs 27 at +0.299R (H003). Every CLES comparing the two distributions was 0.49–0.53.
+- **Conclusion (descriptive):** Both entry families produce nearly identical excursion distributions. The shared RiskManager and management layer normalizes geometry (2 ATR stop, 3 ATR target, implicit ATR% floor) and yields the same payoff profile: about 47% immediate failures that lose about 0.55R each on average, against modest giveback captures. Detection-to-fill latency is a small share of stop losses. No rule was derived; no H004 was created.
+- **Strategy behavior changed:** No.
