@@ -506,11 +506,12 @@ def _isolated_one(sym: str, df: pd.DataFrame, t: int, equity: float, end: str, b
 
 
 def _isolated_chunk(job):
-    sym, df, ts, equity, end = job
-    return [(sym, int(t), _isolated_one(sym, df, int(t), equity, end)) for t in ts]
+    sym, df, ts, equity, end, bps = job
+    return [(sym, int(t), _isolated_one(sym, df, int(t), equity, end, bps)) for t in ts]
 
 
-def run_isolated(keys: Sequence[Tuple[str, int]], dev_bars, equity: float, end: str, workers: int = 6):
+def run_isolated(keys: Sequence[Tuple[str, int]], dev_bars, equity: float, end: str, workers: int = 6,
+                 bps: float = SHADOW_SLIPPAGE_BPS):
     by = {}
     for s, t in keys:
         by.setdefault(s, []).append(t)
@@ -518,7 +519,7 @@ def run_isolated(keys: Sequence[Tuple[str, int]], dev_bars, equity: float, end: 
     for s, ts in sorted(by.items()):
         ts = sorted(set(ts))
         for k in range(0, len(ts), 2000):
-            jobs.append((s, dev_bars[s], ts[k:k + 2000], equity, end))
+            jobs.append((s, dev_bars[s], ts[k:k + 2000], equity, end, bps))
     out = {}
     if workers > 1 and len(jobs) > 1:
         with ProcessPoolExecutor(max_workers=workers) as pool:

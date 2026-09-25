@@ -469,3 +469,16 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Labels (predeclared matrix):** H001 and H003 both get SIGNAL_EDGE_TOO_SMALL_FOR_COST (positive at 0 bps, negative at 5 bps) and DATA_FEED_SENSITIVE. No RISK_FILTER_COMPRESSION.
 - **Caveat:** the 0 bps gross edge is not attributable to signal selection, because matched random entries show equal or better forward returns.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — Random control @ 0 bps (confirmatory diagnostic; DEVELOPMENT only; no H005)
+
+- **Question:** are the matched random entries from Research Sanity Audit V1 also positive at 0 bps under the same isolated management?
+- **Method:** `src/random_control_0bps.py` reuses the frozen audit controls exactly.
+  - The 200 replicates were recomputed and verified identical to the audit's `random_control_replicates.csv` for both strategies.
+  - Same one-trade isolated engine, 0 bps fill slippage (the RiskManager still assumes 5 bps), fixed $100k equity per run.
+  - Supporting change: `research_sanity_audit.run_isolated` gained a pass-through `bps` parameter (default 5, so audit behavior is unchanged).
+- **H001:** real +0.021R (PF 1.08) vs random median +0.021R (Q05–Q95: +0.000 to +0.045) → 52.5th percentile.
+- **H003:** real +0.048R (PF 1.20) vs random median +0.039R (Q05–Q95: +0.004 to +0.086) → 67.5th percentile.
+- **Other rates:** win rate, immediate-failure, stop, giveback, take-profit and scale-out rates stay close to random. Real is slightly worse on some: H001 immediate failures 98.5th percentile, H003 take-profit 0.5th percentile.
+- **Conclusion (descriptive):** matched random entries generate about the same gross edge at 0 bps. The positive 0 bps expectancy is consistent with long-market drift plus shared management, not signal alpha.
+- **Strategy behavior changed:** No.
