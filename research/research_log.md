@@ -399,3 +399,42 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
   - `spy_slope_windows_spanning_missing_bucket` (bucket level): 3.
 - **H004 data readiness:** PASS. No H004 trading outcome was computed. Validation, known and forward SPY data were not accessed.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_004 implemented and evaluated on DEVELOPMENT (H003 + SPY regime gate)
+
+- **Implementation:** frozen spec `31526c2`.
+  - `src/strategy_v2_h004.py` (gate wrapper around frozen H003) and `src/research_h004.py` (runner).
+  - `src/spy_context_data.py` refactored so the slope-gap diagnostic also gives per-bar flags; its outputs are unchanged.
+  - No shared engine, RiskManager, H003 or live code changed.
+- **Pre-run checks:**
+  - The internal gate-disabled mode reproduced stored H003 development byte for byte (trades.csv, trades.json, daily_results.csv, equity_curve.csv; summary.json equal).
+  - SPY manifest PASS and checksum `7af01690…` verified.
+  - Time-alignment audit: 4,497 rows, 0 violations.
+- **Funnel:**
+  - 4,497 raw H003 BUY signals (identical to H003) = 1,166 `MARKET_REGIME_BLOCKED` + 0 `UNAVAILABLE` + 3,331 passed.
+  - Of the passed signals: 89 had the symbol already open, 601 hit the profit halt, 295 hit the loss-streak halt, and 2,346 reached the RiskManager.
+  - At the RiskManager: 926 accepts; rejects were 913 RR, 400 liquidity, 98 leverage and 9 max positions.
+- **Results (DEVELOPMENT EVIDENCE):**
+  - 926 trades, 41.9% win rate, −$23,305 (−23.3%).
+  - Expectancy −$25.17 / −0.0598R; PF 0.781; total R −55.34; max DD −26.48%; max loss streak 10.
+  - Exits: giveback 721 (+$36,056), stop 178 (−$75,584), take profit 27 (+$16,222); 142 scale-out legs (+$36,046).
+- **Gates:** D1 FAIL, D2 FAIL, D3 PASS, D4 FAIL (−26.48%), D5 FAIL, D6 FAIL (MARA is 100% of a $3,474 pool).
+- **Immediate failures:** H003 46.8% vs H004 47.3%.
+- **Path decomposition:**
+  - A = 878 trades (−$19,951 in H003 / −$20,606 in H004).
+  - B (regime-removed) = 421 trades (−$11,513).
+  - B′ (passed the gate, then removed by path divergence) = 21 trades (−$1,243).
+  - C (new in H004) = 48 trades (−$2,699).
+  - Bridge: −$32,707 + $11,513 + $1,243 − $655 − $2,699 = −$23,305. It reconciles.
+- **Shadow (descriptive; blocked vs passed, all valid signals):**
+  - 60m median MFE 0.465 vs 0.479R; reached +1R 26.3 vs 27.9%; reached −1R 32.2 vs 32.0%.
+  - weak_forward_excursion: 37.9 vs 35.9%. For the RR + liquidity subset: 38.8 vs 37.1%.
+  - The stateless check agreed with the RiskManager on 2,337 of 2,337 signals.
+- **Regime:**
+  - 74.1% positive, 25.9% negative, 0% unavailable.
+  - Median SPY close vs EMA50 +0.27%; median 3-bar EMA50 slope +0.032%.
+  - Signal-level slope-gap windows: 1 (INTC 2024-12-24).
+  - 2024-12-23: 0 raw signals, 0 unavailable.
+- **Post-run reporting correction:** `exit_rates` used labels that don't match the engine's exit codes. It was recomputed from the stored trades.json with no re-run and no metric changed.
+- **Outcome:** progression to validation **FAIL**, so H004 is REJECTED_AT_DEVELOPMENT. Validation, known and forward were never run, and validation-range SPY was never downloaded. Any follow-up is H005.
+- **Strategy behavior changed:** No live behavior changed.

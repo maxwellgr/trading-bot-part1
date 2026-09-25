@@ -424,13 +424,13 @@
     },
     {
       "id": "STRATEGY_V2_HYPOTHESIS_004",
-      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "status": "REJECTED_AT_DEVELOPMENT",
       "created": "2026-09-25",
       "description": "H003 (frozen, unchanged) plus an entry-only SPY broad-market regime gate: an H003 raw BUY proceeds to the existing H003/RiskManager path only if the latest completed regular-session 15Min SPY bar has close > EMA50 and EMA50 3-bar slope > 0. SPY is context only (never traded, sized, in P&L or in D6). No new exit; management unchanged.",
       "parent": "STRATEGY_V2_HYPOTHESIS_003 (frozen spec 6eb6078719d12e50542d7284d6e96f598c115f71; REJECTED_AT_DEVELOPMENT)",
       "spec_document": "research/strategy_v2_hypothesis_004.md",
       "spec_commit": "5bba9da3d6290ac770ce14896d30dc9b9e3d224e",
-      "code_commit": null,
+      "code_commit": "uncommitted working tree on top of 5ec8410 (src/strategy_v2_h004.py, src/research_h004.py); must be committed and recorded",
       "timeframe": "stock signal: H003 5Min regular session; context: SPY 15Min regular session resampled from audited 1Min IEX raw",
       "parameters": {
         "base_strategy": "frozen H003, unchanged (signal, consumption, re-arm, universe, risk, management, execution)",
@@ -480,14 +480,53 @@
       },
       "contamination": "Development is hypothesis-development evidence (motivated by already-viewed H001/H002/H003 development research and the shared management autopsy); parent H003 development results are known; 15Min SPY timeframe chosen a priori, EMA50/3-bar slope reuse H003 concepts, nothing fitted; general public macro knowledge of 2024-2026 index behavior exists, so Validation is not blind at the macro level; Validation is the first untouched test.",
       "data_requirements": "SPY 1Min IEX raw under gitignored data/; manifest research/context_manifest_spy_v1.json (source endpoint, feed=iex, adjustment=raw, requested range, actual first/last timestamp, checksum, row count, session coverage, duplicate/out-of-order counts, OHLC integrity, support-bar availability). Hard-fail before H004 development if: (1) structural/integrity checks fail; (2) < 200 valid pre-development SPY 15Min support bars; (3) any required regular session in development has zero usable regular-session SPY 1Min bars (required session = any Development calendar date on which at least one of the eight tradable symbols has at least one valid regular-session bar in the existing stock cache; Q8). Partial missing buckets within a present session never fail the audit; handled only by MARKET_REGIME_UNAVAILABLE and reported. No percentage coverage threshold.",
-      "development_result": null,
+      "development_result": {
+        "ref": "data/research_v1/h004_development/h004_report.json",
+        "run_at_code": "5ec841053b25c0e58914199fe8affc55d0521b72",
+        "working_tree_dirty": true,
+        "evidence": "hypothesis-development evidence only",
+        "h003_reproduction_check": "byte-identical (trades.csv, trades.json, daily_results.csv, equity_curve.csv; summary.json equal)",
+        "time_alignment_audit": {
+          "rows": 4497,
+          "violations": 0,
+          "pass": true
+        },
+        "raw_h003_signals": 4497,
+        "market_regime_blocked": 1166,
+        "market_regime_unavailable": 0,
+        "market_regime_passed": 3331,
+        "completed_trades": 926,
+        "expectancy_r": -0.05976144640146274,
+        "profit_factor": 0.7812756190396132,
+        "total_r": -55.339099367754486,
+        "max_drawdown_pct": -26.48120707726499,
+        "realized_pnl": -23305.060120000257,
+        "immediate_failure_rate_pct": {
+          "H003": 46.81818181818182,
+          "H004": 47.30021598272138
+        },
+        "gates": {
+          "D1_expectancy_r": "FAIL",
+          "D2_profit_factor": "FAIL",
+          "D3_completed_trades": "PASS",
+          "D4_max_drawdown_pct": "FAIL",
+          "D5_total_r": "FAIL",
+          "D6_symbol_concentration": "FAIL"
+        },
+        "d6": {
+          "positive_pool": 3474.505804999959,
+          "max_share_symbol": "MARA",
+          "max_share": 1.0
+        },
+        "progression_to_validation": "FAIL"
+      },
       "frozen_date": null,
       "validation_viewed_at": null,
       "validation_viewed_before_parameter_changes": null,
       "validation_result": null,
       "known_period_result": null,
       "forward_notes": [],
-      "notes": "Proposed 2026-09-25 at 5bba9da. Q1-Q8 settled 2026-09-25. No implementation, no SPY data downloaded or read, no H004 run. Failure of any development gate -> REJECTED_AT_DEVELOPMENT; any follow-up is H005.",
+      "notes": "Proposed 2026-09-25 at 5bba9da; Q1-Q8 settled; spec frozen 31526c2. Development gate FAILED on 2026-09-25 (D1, D2, D4, D5, D6; D3 PASS); validation never run; validation-range SPY never downloaded; H004 is closed; any follow-up is H005.",
       "review_decisions": {
         "settled": "2026-09-25",
         "Q1": "approved: inherit H003 EMA convention exactly incl. split-boundary behavior",
@@ -528,6 +567,14 @@
       },
       "spec_frozen": {
         "frozen_spec_commit": "31526c27436e53780cae865dde991f2fd9df01a5"
+      },
+      "implementation": {
+        "strategy": "src/strategy_v2_h004.py",
+        "runner": "src/research_h004.py",
+        "tests": "tests/test_strategy_v2_h004.py",
+        "context_data": "src/spy_context_data.py",
+        "implemented": "2026-09-25",
+        "shared_code_changed": false
       }
     }
   ]

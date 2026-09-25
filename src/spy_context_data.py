@@ -351,6 +351,22 @@ def session_coverage(df1: pd.DataFrame, b15: pd.DataFrame, required: Sequence[da
             "development_dates_with_spy_but_not_required": dev_non_required}
 
 
+def slope_gap_flags(b15: pd.DataFrame, expected_dates: Sequence[date]) -> np.ndarray:
+    """
+    Por vela existente k (k >= SLOPE_BARS): 1 si la ventana R−3..R de velas EXISTENTES salta al menos una cubeta
+    esperada ausente (o toca una cubeta fuera de la línea de tiempo esperada), 0 si no; -1 si k < SLOPE_BARS.
+    Línea de tiempo esperada = cubetas RTH de `expected_dates`. Solo diagnóstico (Q2): nunca afecta elegibilidad.
+    """
+    timeline = [t.value for d in sorted(expected_dates) for t in expected_bucket_starts(d)]
+    pos = {v: k for k, v in enumerate(timeline)}
+    p = np.array([pos.get(v, -1) for v in _ns(b15.index)], dtype=np.int64)
+    out = np.full(len(p), -1, dtype=np.int64)
+    for k in range(SLOPE_BARS, len(p)):
+        w = p[k - SLOPE_BARS:k + 1]
+        out[k] = int(bool((w < 0).any() or (np.diff(w) != 1).any()))
+    return out
+
+
 def slope_windows_spanning_missing(b15: pd.DataFrame, expected_dates: Sequence[date],
                                    start: Optional[date] = None, end: Optional[date] = None) -> Dict[str, Any]:
     """
@@ -360,26 +376,16 @@ def slope_windows_spanning_missing(b15: pd.DataFrame, expected_dates: Sequence[d
     posible); el conteo por señal se reporta en la corrida de desarrollo de H004.
     """
     start, end = start or DEV_START, end or DEV_END
-    timeline = [t.value for d in sorted(expected_dates) for t in expected_bucket_starts(d)]
-    pos = {v: k for k, v in enumerate(timeline)}
+    timeline = {t.value for d in expected_dates for t in expected_bucket_starts(d)}
+    flags = slope_gap_flags(b15, expected_dates)
     ns = _ns(b15.index)
-    p = np.array([pos.get(v, -1) for v in ns])
     s_utc = pd.Timestamp(start).tz_localize(NY).tz_convert("UTC").value
     e_utc = (pd.Timestamp(end) + pd.Timedelta(days=1)).tz_localize(NY).tz_convert("UTC").value
-    count = total = off_timeline = 0
-    for k in range(len(ns)):
-        if not (s_utc <= ns[k] < e_utc) or k < SLOPE_BARS:
-            continue
-        total += 1
-        w = p[k - SLOPE_BARS:k + 1]
-        if (w < 0).any():
-            off_timeline += 1
-            count += 1
-            continue
-        if (np.diff(w) != 1).any():
-            count += 1
-    return {"spy_slope_windows_spanning_missing_bucket": int(count), "development_15min_bars_evaluated": int(total),
-            "windows_touching_bucket_outside_expected_timeline": int(off_timeline),
+    sel = [k for k in range(SLOPE_BARS, len(ns)) if s_utc <= ns[k] < e_utc]
+    off = sum(1 for k in sel if any(v not in timeline for v in ns[k - SLOPE_BARS:k + 1]))
+    return {"spy_slope_windows_spanning_missing_bucket": int(sum(flags[k] for k in sel)),
+            "development_15min_bars_evaluated": len(sel),
+            "windows_touching_bucket_outside_expected_timeline": int(off),
             "level": "bucket-level (every existing development 15Min bar as a potential R); signal-level count is "
                      "reported by the H004 development run",
             "diagnostic_only": True}
