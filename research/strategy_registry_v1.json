@@ -314,12 +314,12 @@
     },
     {
       "id": "STRATEGY_V2_HYPOTHESIS_003",
-      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "status": "REJECTED_AT_DEVELOPMENT",
       "created": "2026-09-25",
       "description": "5Min regular-session trend-filtered consolidation breakout, long-only. New signal family (not H001 pullback, not H002 FTP). No strategy exit signal; existing generic trade management and production risk values unchanged.",
       "spec_document": "research/strategy_v2_hypothesis_003.md",
       "spec_commit": "ed4967a883de4a87846713bb329674470c2e1343",
-      "code_commit": null,
+      "code_commit": "uncommitted working tree on top of 65e8383 (src/strategy_v2_h003.py, src/research_h003.py); must be committed and recorded before FROZEN",
       "timeframe": "5Min resampled from the audited 1Min IEX raw cache; regular session only",
       "parameters": {
         "ema_span": 50,
@@ -369,14 +369,40 @@
         }
       },
       "contamination": "Development is hypothesis-development evidence (direction motivated by H001/H002 development research); close_location >= 0.75 coincides with an already-viewed H001 development autopsy bucket boundary; Validation is the first untouched test.",
-      "development_result": null,
+      "development_result": {
+        "ref": "data/research_v1/h003_development/h003_report.json",
+        "run_at_code": "65e8383cd4fc9f80a094bc4d74763b85b2aad2a7",
+        "working_tree_dirty": true,
+        "evidence": "hypothesis-development evidence only",
+        "generated_signals": 4497,
+        "completed_trades": 1320,
+        "expectancy_r": -0.06138387208362837,
+        "profit_factor": 0.7909624214854039,
+        "total_r": -81.02671115038952,
+        "max_drawdown_pct": -35.33557770698912,
+        "realized_pnl": -32706.950570000292,
+        "gates": {
+          "D1_expectancy_r": "FAIL",
+          "D2_profit_factor": "FAIL",
+          "D3_completed_trades": "PASS",
+          "D4_max_drawdown_pct": "FAIL",
+          "D5_total_r": "FAIL",
+          "D6_symbol_concentration": "FAIL"
+        },
+        "d6": {
+          "positive_pool": 2374.433759999954,
+          "max_share_symbol": "MARA",
+          "max_share": 1.0
+        },
+        "progression_to_validation": "FAIL"
+      },
       "frozen_date": null,
       "validation_viewed_at": null,
       "validation_viewed_before_parameter_changes": null,
       "validation_result": null,
       "known_period_result": null,
       "forward_notes": [],
-      "notes": "Failure of any development gate -> REJECTED_AT_DEVELOPMENT; any follow-up is H004.",
+      "notes": "Failure of any development gate -> REJECTED_AT_DEVELOPMENT; any follow-up is H004. Development gate FAILED on 2026-09-25 (D1, D2, D4, D5, D6); validation never run; H003 is closed; any follow-up is H004.",
       "review_decisions": {
         "settled": "2026-09-25",
         "Q1": "confirmed: 10:00-start bar, decided 10:05, fill 10:05 open",
@@ -387,6 +413,13 @@
       },
       "spec_frozen": {
         "frozen_spec_commit": "6eb6078719d12e50542d7284d6e96f598c115f71"
+      },
+      "implementation": {
+        "strategy": "src/strategy_v2_h003.py",
+        "runner": "src/research_h003.py",
+        "tests": "tests/test_strategy_v2_h003.py",
+        "implemented": "2026-09-25",
+        "shared_code_changed": false
       }
     }
   ]

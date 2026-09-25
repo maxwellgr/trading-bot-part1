@@ -285,3 +285,26 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Disclosure kept:** the ≥ 0.75 close-location boundary was already viewed in H001 development; H003 development is hypothesis-development evidence, and validation is the first untouched test.
 - **Status:** SPECIFIED_NOT_IMPLEMENTED. No other rule or constant changed. No code; no data.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_003 implemented; DEVELOPMENT run
+
+- **Implementation:** `src/strategy_v2_h003.py` and `src/research_h003.py` (research-only; existing strategy injection; no shared code changed), plus 33 tests. Full suite 529 passing. Frozen spec commit 6eb6078.
+- **DEVELOPMENT (hypothesis-development evidence only), 5 bps:**
+  - **Funnel:** 4,497 BUY signals → 1,320 accepted, 1,894 rejected (RR 1,165; liquidity 581; leverage 130; max positions 18). Pre-risk blocks: loss streak 373, profit halt 782, symbol already open 128.
+  - **Results:** 1,320 trades, win 41.4%, P&L −$32,706.95 (−32.71%), expectancy −$24.78 / −0.0614R, PF 0.791, total R −81.03, max DD −35.34%, max loss streak 17.
+  - **Exits:** giveback 1,022 (+$56,726), stop 257 (−$113,354), take-profit 41 (+$23,921); 198 scale-out legs (+$56,405).
+  - **Signal structure (medians, all signals / trades):** range/ATR 1.664 / 1.625; breakout-bar range/ATR 0.991 / 0.891; breakout distance/ATR 0.375 / 0.313.
+  - **Other:** non-contiguous windows on 23 signals and 0 trades; 6 NVDA split-week signals; 2,037 same-session re-arms.
+- **Gates:**
+  - D1 FAIL, D2 FAIL, D3 PASS, D4 FAIL, D5 FAIL.
+  - D6 FAIL: MARA is the only positive symbol, 100% of a $2,374.43 pool.
+- **Versus DEVELOPMENT benchmarks:**
+
+  | Strategy | Expectancy | PF | Max DD |
+  |---|---|---|---|
+  | MA_BASELINE_V1 | −0.105R | 0.64 | −72.5% |
+  | H001 | −0.059R | 0.80 | −44.1% |
+  | H003 | −0.061R | 0.79 | −35.3% |
+
+- **Outcome:** progression to validation **FAIL**, so H003 is REJECTED_AT_DEVELOPMENT. Validation, known and forward were never run. Any follow-up is H004.
+- **Strategy behavior changed:** No live behavior changed.
