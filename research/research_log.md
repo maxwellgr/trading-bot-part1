@@ -166,3 +166,44 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
     H001 is still negative.
 - **Conclusion (descriptive):** H001's losses are dominated by immediate failures that hit their stops. The entry features studied do not separate these failures from winners. The accepted-trade sample is strongly shaped by the RiskManager's RR floor and by the daily halts.
 - **Strategy behavior changed:** No. H001 is unchanged and closed; no H002 was created.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_002 specified (pre-registration)
+
+- **Hypothesis:** Frozen H001 plus one trade-management rule, the Failure-to-Progress exit.
+  - At the decision on the 3rd post-fill 5Min close (the fill bar counts as the 1st), exit all remaining shares if both hold:
+    - close-based MFE < +0.25R (strict);
+    - that close ≤ the actual entry fill price (equality triggers).
+  - The exit fills at the next available bar open with sell slippage.
+- **Unchanged:** entries, risk, sizing, execution and all existing exits. FTP runs only after the unchanged H001 management sequence, and only if no exit order was submitted at that decision.
+- **Constants:** 3 bars and +0.25R, derived from the viewed H001 DEVELOPMENT autopsy. H002's development result is therefore in-sample for them; validation would be the first independent test. No alternatives will be tested under this ID.
+- **Gates:** identical to H001 (D1–D6, including the exact D6 positive-pool formula; V1–V4).
+- **Comparison plan:** a required matched-trade comparison against H001 on development, covering losses avoided vs winners sacrificed.
+- **Pending:** 5 review decisions (R1–R5).
+- **Spec document:** `research/strategy_v2_hypothesis_002.md`, written at commit 0bd6d95.
+- **Status:** SPECIFIED_NOT_IMPLEMENTED. No code; no data viewed for H002; validation, known and forward untouched.
+- **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_002 review decisions settled
+
+- **R1 (revised):** When the 3rd post-fill close is the 15:55 bar, FTP is evaluated at 16:00 using exactly the first three closes, with the third close as current_close. If it triggers, the exit is pending and fills at the next available regular-session open. FTP is neither skipped nor deferred; the pending path is backtest-only.
+- **R2–R5:** approved.
+  - R2: the H001 sequence runs first; FTP only if no exit was submitted.
+  - R3: FTP measures from the actual fill.
+  - R4: the original initial risk per share.
+  - R5: FTP P&L feeds all state like any exit; divergence is reported.
+- **Disclosure added:** H002 DEVELOPMENT is a screening/resubstitution check only, not an independent test. VALIDATION is the first untouched test, viewable once after a complete freeze.
+- **Status:** SPECIFIED_NOT_IMPLEMENTED. No code, no data viewed.
+- **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_002 specification FROZEN
+
+- **R6 confirmed:** the engine's day-boundary accounting is kept exactly.
+  - An overnight FTP fill at the next session's open is in equity, the ledger, total P&L and `daily_results` (fill date).
+  - It does not carry into the new day's loss streak, loss limit or profit halt after the reset.
+  - It was not changed for H002, because that would add a second experimental variable. It is documented as an inherited convention.
+- **Additions:**
+  - explicit day-boundary tests (spec §11.13b);
+  - required H002 development metrics: `overnight_ftp_fills`, `overnight_ftp_realized_pnl`, `overnight_ftp_losses`, `overnight_ftp_wins` (plus breakevens and checkpoint path). Overnight means the NY fill date differs from the NY FTP decision date.
+- **Status:** specification approved and FROZEN; still SPECIFIED_NOT_IMPLEMENTED. Implementation starts only after the frozen spec is committed, and that commit hash will be recorded in the spec header and the registry.
+- **Data:** no code; no data viewed.
+- **Strategy behavior changed:** No.

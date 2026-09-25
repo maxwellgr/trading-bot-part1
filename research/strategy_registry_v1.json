@@ -203,6 +203,82 @@
         "engine_lookback_bars": 278,
         "window_hours_limit": false
       }
+    },
+    {
+      "id": "STRATEGY_V2_HYPOTHESIS_002",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "created": "2026-09-25",
+      "description": "Identical to frozen H001 (entries, risk, management, execution) plus ONE rule: Failure-to-Progress exit at the 3rd post-fill 5Min close if close-based MFE < +0.25R and close <= entry fill.",
+      "base": "STRATEGY_V2_HYPOTHESIS_001",
+      "spec_document": "research/strategy_v2_hypothesis_002.md",
+      "spec_commit": "0bd6d95d4521c2ce8a2e65a873fb1facc9db3b61",
+      "code_commit": null,
+      "timeframe": "5Min (as H001)",
+      "parameters": {
+        "inherits": "all STRATEGY_V2_HYPOTHESIS_001 parameters unchanged",
+        "ftp_post_fill_closes": 3,
+        "ftp_fill_bar_counts_as_first_close": true,
+        "ftp_mfe_threshold_r_strict_lt": 0.25,
+        "ftp_current_close_le_entry_fill": true,
+        "ftp_price_source": "completed 5Min closes only (no intrabar highs, no pre-fill bars)",
+        "ftp_reference_price": "actual entry fill price F (R3)",
+        "ftp_r_denominator": "risk_per_share_modeled, original initial risk per share (R4)",
+        "ftp_one_time_check": true,
+        "ftp_precedence": "after unchanged H001 _manage sequence; only if no exit order submitted that decision (R2)",
+        "ftp_exit_execution": "next available bar open x (1 - 5 bps), $0 commission",
+        "ftp_last_bar_checkpoint": "if 3rd post-fill close is the 15:55 bar (known 16:00, no engine decision): evaluate at 16:00 with exactly the first 3 closes, current_close = 3rd close; if triggered, pending exit fills at next available RTH bar open (normally next 09:30); backtest-only pending path (R1)",
+        "ftp_accounting": "feeds loss streak, daily P&L/halts and all portfolio/risk state like any completed exit, incl. existing engine day-boundary rule (R5)",
+        "ftp_day_boundary": "inherited engine convention, unchanged (R6)"
+      },
+      "preregistered_gates": {
+        "development_5bps": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gte": 1.1,
+          "completed_trades_gte": 150,
+          "max_drawdown_pct_lte": 25,
+          "total_r_gt": 0,
+          "max_symbol_share_of_positive_pnl_lte": 0.5
+        },
+        "d6_definition": "P_s = sum realized_pnl of completed trades per symbol; pool = sum max(P_s,0); pass iff pool > 0 and max(max(P_s,0)/pool) <= 0.50 (exact, no rounding); pool == 0 -> FAIL (undefined, empty positive pool)",
+        "validation_5bps_once": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gt": 1.0,
+          "total_r_gt": 0,
+          "max_drawdown_pct_lte": 30
+        }
+      },
+      "required_development_comparison_vs_h001": [
+        "aggregate metrics",
+        "per-exit-reason count/P&L incl. failure_to_progress",
+        "matched trades by (symbol, entry_signal_timestamp)",
+        "H001 stop_hit trades exited by FTP (losses avoided)",
+        "H001 winners exited by FTP (winners sacrificed)",
+        "exact P&L decomposition (matched + H002-only - H001-only)",
+        "overnight FTP metrics: overnight_ftp_fills, overnight_ftp_realized_pnl, overnight_ftp_losses, overnight_ftp_wins (+ breakevens, by checkpoint path); overnight = NY fill date != NY FTP decision date"
+      ],
+      "contamination": "H002 DEVELOPMENT is NOT an independent test: the 3-bar and +0.25R constants were derived from H001 analysis on the same DEVELOPMENT split; development is a screening/resubstitution check only. The first untouched test is VALIDATION, viewable once only after H002 is completely frozen.",
+      "development_result": null,
+      "frozen_date": null,
+      "validation_viewed_at": null,
+      "validation_viewed_before_parameter_changes": null,
+      "validation_result": null,
+      "known_period_result": null,
+      "forward_notes": [],
+      "notes": "One frozen test. No alternative bar counts or thresholds may be tested under this ID.",
+      "review_decisions": {
+        "settled": "2026-09-25",
+        "R1": "evaluate at 16:00 on 3rd close; pending exit at next available open; not skipped, not deferred",
+        "R2": "approved as proposed",
+        "R3": "approved: actual fill F; H001 management keeps modeled-entry semantics",
+        "R4": "approved: original risk_per_share_modeled",
+        "R5": "approved: like any completed exit; divergence reported",
+        "R6": "confirmed: keep engine day-boundary accounting exactly (overnight FTP fill in equity/ledger/total P&L/daily_results on fill date; does not carry into new day's loss streak, loss limit or profit halt after reset); not changed for H002 (would be a 2nd variable)"
+      },
+      "spec_frozen": {
+        "approved": "2026-09-25",
+        "frozen_spec_commit": null,
+        "note": "implementation may start only after the frozen spec document is committed; record that commit here"
+      }
     }
   ]
 }
