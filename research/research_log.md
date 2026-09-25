@@ -378,3 +378,24 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Manifest fields added to the spec:** `required_session_definition`, `required_session_count`, `required_session_dates` (or a hash of the list), `excluded_zero_stock_coverage_dates`, `required_sessions_with_zero_spy_data`, `required_sessions_with_partial_spy_gaps`.
 - **Status:** Q1–Q8 are all settled; SPECIFIED_NOT_IMPLEMENTED. No implementation, no SPY download or read, no H004 run. Validation, known and forward untouched.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — H004 SPY context data prepared and audited (data only; no H004 implementation or run)
+
+- **Frozen spec:** `31526c2`. Module `src/spy_context_data.py`, run in the order sessions → download → audit. Manifest: `research/context_manifest_spy_v1.json`. The stock manifest is untouched.
+- **Required sessions (Q8), derived from the stock cache only, before any SPY access:**
+  - 501 dates, 2024-01-02 → 2025-12-31, sha256 `208bb7bf873f952cc6183c79c80dcce465910b4678f87598ac99c400d73cbea3`;
+  - two derivations were identical;
+  - the stock cache matches `historical_manifest_v1.json`;
+  - excluded (zero stock coverage): 2025-03-10 only.
+- **SPY download:** Alpaca v2, IEX, raw, 1Min, 2023-12-01 → 2025-12-31 only, no SIP.
+  - 200,276 rows, 2023-12-01T14:30Z → 2025-12-31T20:59Z, sha256 `7af01690…9930ed`.
+  - Integrity clean: 0 duplicates, 0 out of order, 0 bad OHLC, 0 non-positive prices, 0 negative volume, 0 NaN or non-finite values.
+- **15Min bars:** 13,452 bars, all anchored and monotonic. Early closes end with the 12:45 bucket. 1–15 minutes per bucket (observed 5–15).
+- **Support:** 200/200 bars (2023-12-19 11:30 → 2023-12-29 15:45 ET).
+- **Coverage:**
+  - zero-SPY required sessions: none;
+  - partial gaps: 2024-12-23 only, with 22 missing buckets (IEX truncated at about 10:22, as for stocks);
+  - buckets: 12,954 expected, 12,932 existing, 22 missing;
+  - `spy_slope_windows_spanning_missing_bucket` (bucket level): 3.
+- **H004 data readiness:** PASS. No H004 trading outcome was computed. Validation, known and forward SPY data were not accessed.
+- **Strategy behavior changed:** No.
