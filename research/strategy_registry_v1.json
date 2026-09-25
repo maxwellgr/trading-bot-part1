@@ -525,6 +525,9 @@
           "required_sessions_with_zero_spy_data",
           "required_sessions_with_partial_spy_gaps"
         ]
+      },
+      "spec_frozen": {
+        "frozen_spec_commit": "31526c27436e53780cae865dde991f2fd9df01a5"
       }
     }
   ]

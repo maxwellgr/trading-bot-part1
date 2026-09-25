@@ -6,6 +6,7 @@
 | Status | **SPECIFIED_NOT_IMPLEMENTED** (review decisions Q1–Q8 settled 2026-09-25, §21) |
 | Date created | 2026-09-25 |
 | Spec written at commit | `5bba9da3d6290ac770ce14896d30dc9b9e3d224e` (`5bba9da`, "feat: add shared management autopsy") |
+| Frozen spec commit | `31526c27436e53780cae865dde991f2fd9df01a5` (`31526c2`, "docs: freeze h004 strategy specification") |
 | Parent | `STRATEGY_V2_HYPOTHESIS_003`, frozen spec `6eb6078719d12e50542d7284d6e96f598c115f71` (REJECTED_AT_DEVELOPMENT) |
 | Changed component | **One:** an entry-only SPY regime gate applied to H003's raw BUY signals |
 | Protocol | `config/research_protocol_v1.json` |
