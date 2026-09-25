@@ -129,3 +129,40 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
   - D6 FAIL: positive pool $3,576.48; MARA 97.2%, MU 2.8%; all other symbols negative.
 - **Outcome:** progression to validation **FAIL**, so H001 is REJECTED_AT_DEVELOPMENT (spec §12). Validation was never run and never viewed. H001 is closed; any follow-up needs a new ID and a new pre-registration.
 - **Strategy behavior changed:** No live behavior changed.
+
+## 2026-09-25 — H001 DEVELOPMENT AUTOPSY (diagnostic only)
+
+- **Question:** Why does H001 lose on DEVELOPMENT, and what descriptive evidence exists for a future hypothesis?
+- **Scope:** DEVELOPMENT only, 2024-01-02 → 2025-12-31.
+  - Bars were loaded only up to 2025-12-31.
+  - The rerun reproduced the stored H001 `trades.json` byte-for-byte.
+  - Validation, known and forward were not accessed.
+- **Output:** `data/research_v1/h001_autopsy/`.
+- **Results (DEVELOPMENT EVIDENCE):**
+  - **Funnel:** 10,491 signals generated → 4,965 reached risk → 1,679 accepted and completed.
+    - Not reaching risk: 3,123 daily-profit-halt, 1,626 loss-streak, 777 already in position.
+    - Rejected: 1,984 RR, 1,069 liquidity, 210 leverage, 23 max positions.
+    - RR rejections act as an implicit ATR% floor: rejected max 0.287% vs accepted min 0.288%.
+  - **Losers (987):** 79.7% never reached +0.25R and 94.5% never reached +0.5R; 0.2% reached +1R. Median MFE +0.07R, median MAE +0.41R, median 15 min to MAE.
+  - **Exit reasons:**
+    - stop_hit: 354 trades, −$136,674; 98.6% never reached +0.25R.
+    - giveback_close: 1,259 trades, +$65,327 overall; 514 with MFE < 0.25R lost −$32,326, while 204 with MFE ≥ 1R made +$85,928.
+    - take_profit_hit: 66 trades, +$33,333 (22.6% of gross profit).
+  - **Pullback depth:** penetrated −0.057R (n=1,057), close −0.042R (n=312), loose −0.082R (n=310). Small differences; all negative.
+  - **Trend age:** 0–12 bars −0.113R; 13+ bars −0.010 to −0.060R.
+  - **Trigger:** close below midpoint −0.174R (n=125); strongest body tercile −0.032R.
+  - **ATR% quintiles:** not monotonic (Q2 worst −0.129R; Q3 +0.005R). Modeled slippage cost ranges from 0.155R (Q1) to 0.051R (Q5).
+  - **Time of day:** only 14:00–16:00 was positive (+0.088R, n=137), confounded by overnight holds. The 41 overnight trades made +0.855R / +$11,305; the 1,638 intraday trades made −0.082R / −$49,318.
+  - **Separation:** weak everywhere; CLES about 0.44–0.57 for all entry features. No evidence of chasing (entry-distance medians nearly identical).
+  - **Versus MA_BASELINE_V1 on development:**
+
+    | Metric | MA_BASELINE_V1 | H001 |
+    |---|---|---|
+    | Expectancy | −0.105R | −0.059R |
+    | Profit factor | 0.64 | 0.80 |
+    | Max drawdown | −72.5% | −44.1% |
+    | Max loss streak | 25 | 12 |
+
+    H001 is still negative.
+- **Conclusion (descriptive):** H001's losses are dominated by immediate failures that hit their stops. The entry features studied do not separate these failures from winners. The accepted-trade sample is strongly shaped by the RiskManager's RR floor and by the daily halts.
+- **Strategy behavior changed:** No. H001 is unchanged and closed; no H002 was created.
