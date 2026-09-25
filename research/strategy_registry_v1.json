@@ -311,6 +311,80 @@
         "tests": "tests/test_strategy_v2_h002.py",
         "implemented": "2026-09-25"
       }
+    },
+    {
+      "id": "STRATEGY_V2_HYPOTHESIS_003",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "created": "2026-09-25",
+      "description": "5Min regular-session trend-filtered consolidation breakout, long-only. New signal family (not H001 pullback, not H002 FTP). No strategy exit signal; existing generic trade management and production risk values unchanged.",
+      "spec_document": "research/strategy_v2_hypothesis_003.md",
+      "spec_commit": "ed4967a883de4a87846713bb329674470c2e1343",
+      "code_commit": null,
+      "timeframe": "5Min resampled from the audited 1Min IEX raw cache; regular session only",
+      "parameters": {
+        "ema_span": 50,
+        "ema_slope_bars": 3,
+        "trend": "close_T > EMA50_T and EMA50_T - EMA50_{T-3} > 0",
+        "consolidation_bars": 6,
+        "consolidation_window": "six existing completed bars T-6..T-1, same session; consecutive clock slots not required; no fabrication (Q2)",
+        "consolidation_atr": "ATR14 at T-1",
+        "consolidation_range_atr_lte": 2.0,
+        "breakout": "close_T > consolidation_high (strict)",
+        "bullish_bar": "close_T > open_T",
+        "close_location_gte": 0.75,
+        "zero_range_trigger_fails": true,
+        "rearm": "next BUY requires all six window bars strictly after previous signal S (T-6 > S); reset each session; consumed on emission",
+        "exit_signal": "none",
+        "support_bars_before_each_split": 200,
+        "indicator_convention": "inherit H001 own-window EMA (200 bars ending at each bar), engine lookback 278, min-history guard 150; official run requires exactly 200 pre-split support bars (Q3)",
+        "risk_and_management": "production MA_BASELINE_V1 values unchanged; existing generic management",
+        "execution": {
+          "fill_model": "next_bar_open",
+          "slippage_bps": 5.0,
+          "commission_per_fill": 0.0
+        },
+        "invalid_atr": "ATR_{T-1} zero, non-finite or unavailable -> consolidation invalid, no signal, no fallback (Q4)",
+        "earliest_signal": "bar starting 10:00 ET, known/decided at 10:05 ET, fills at 10:05 bar open (Q1)",
+        "report_normalization": "breakout-bar range and breakout distance / ATR_{T-1} (Q5, reporting only)",
+        "diagnostics_only": [
+          "signals_with_noncontiguous_consolidation_window",
+          "trades_with_noncontiguous_consolidation_window"
+        ]
+      },
+      "preregistered_gates": {
+        "development_5bps": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gte": 1.1,
+          "completed_trades_gte": 150,
+          "max_drawdown_pct_lte": 25,
+          "total_r_gt": 0,
+          "max_symbol_share_of_positive_pnl_lte": 0.5
+        },
+        "d6_definition": "P_s = sum realized_pnl of completed trades per symbol; pool = sum max(P_s,0); pass iff pool > 0 and max(max(P_s,0)/pool) <= 0.50 (exact, no rounding); pool == 0 -> FAIL (undefined, empty positive pool)",
+        "validation_5bps_once": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gt": 1.0,
+          "total_r_gt": 0,
+          "max_drawdown_pct_lte": 30
+        }
+      },
+      "contamination": "Development is hypothesis-development evidence (direction motivated by H001/H002 development research); close_location >= 0.75 coincides with an already-viewed H001 development autopsy bucket boundary; Validation is the first untouched test.",
+      "development_result": null,
+      "frozen_date": null,
+      "validation_viewed_at": null,
+      "validation_viewed_before_parameter_changes": null,
+      "validation_result": null,
+      "known_period_result": null,
+      "forward_notes": [],
+      "notes": "Failure of any development gate -> REJECTED_AT_DEVELOPMENT; any follow-up is H004.",
+      "review_decisions": {
+        "settled": "2026-09-25",
+        "Q1": "confirmed: 10:00-start bar, decided 10:05, fill 10:05 open",
+        "Q2": "approved: six existing bars same session, non-contiguous allowed, diagnostics only",
+        "Q3": "approved: inherit H001 indicator semantics",
+        "Q4": "approved: invalid ATR -> no signal, no fallback",
+        "Q5": "approved: ATR_{T-1} for report normalization"
+      }
     }
   ]
 }

@@ -255,3 +255,33 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
   - H002's damaging path divergence came mainly from same-symbol re-entries.
   - No rule was derived; no H003 was created.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_003 specified (proposed pre-registration)
+
+- **Hypothesis:** new signal family: a 5Min regular-session trend-filtered consolidation breakout, long-only.
+  - **Trend:** close > EMA50 and EMA50 3-bar slope > 0.
+  - **Consolidation:** the six same-session bars before T have range ≤ 2.00 × ATR14(T−1).
+  - **Breakout:** close_T > consolidation high (strict), a bullish bar, and close location ≥ 0.75.
+  - **Setup state:** consumed on emission; re-arm needs a fresh six-bar window after the previous signal; resets each session.
+- **Exits and risk:** no strategy exit; generic trade management and production risk values unchanged.
+- **Not reused:** H001's pullback rule and H002's FTP exit.
+- **Gates:** identical to H001/H002 (D1–D6, including the exact D6 formula; V1–V4).
+- **Contamination disclosure:**
+  - Development is hypothesis-development evidence only.
+  - The 0.75 close-location threshold coincides with an H001 autopsy bucket boundary already viewed.
+  - Validation is the first untouched test.
+- **Pending:** 5 review questions (Q1–Q5).
+- **Spec document:** `research/strategy_v2_hypothesis_003.md`, written at commit ed4967a.
+- **Status:** SPECIFIED_NOT_IMPLEMENTED. No code; no H003 data produced or read; validation, known and forward untouched.
+- **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_003 review decisions settled
+
+- **Q1:** the earliest signal bar starts at 10:00 ET; it is decided at its 10:05 close, and the entry fills at the 10:05 bar open.
+- **Q2:** the window is the six existing same-session bars; non-contiguous windows are allowed and nothing is fabricated. The non-contiguous signal and trade counts are diagnostics only.
+- **Q3:** H001 indicator semantics inherited (own-window EMA200, 278-bar context, 150-bar guard); exactly 200 support bars are still required.
+- **Q4:** an invalid ATR(T−1) means no signal, with no fallback.
+- **Q5:** ATR(T−1) is used for report normalization.
+- **Disclosure kept:** the ≥ 0.75 close-location boundary was already viewed in H001 development; H003 development is hypothesis-development evidence, and validation is the first untouched test.
+- **Status:** SPECIFIED_NOT_IMPLEMENTED. No other rule or constant changed. No code; no data.
+- **Strategy behavior changed:** No.
