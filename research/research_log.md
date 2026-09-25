@@ -207,3 +207,23 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Status:** specification approved and FROZEN; still SPECIFIED_NOT_IMPLEMENTED. Implementation starts only after the frozen spec is committed, and that commit hash will be recorded in the spec header and the registry.
 - **Data:** no code; no data viewed.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_002 implemented; DEVELOPMENT run
+
+- **Implementation:** `src/strategy_v2_h002.py` (FTPEngine, a research-only subclass; the shared engine is unchanged), `src/research_h002.py` and 36 tests; full suite 474 passing. Frozen spec commit 6b0ac23.
+- **Invariance:** with FTP off, the development run is byte-identical to stored H001 (trades.json, trades.csv, equity_curve.csv, daily_results.csv) and summary.json is equal.
+- **DEVELOPMENT (screening/resubstitution only), 5 bps:**
+  - 1,808 trades, win 32.7%, P&L −$45,210.39, expectancy −0.0689R, PF 0.726, total R −124.66, max DD −49.61%, max loss streak 17.
+  - Exits: failure_to_progress 613 (−$88,247), giveback 1,046 (+$52,592), stop 88 (−$38,040), take-profit 61 (+$28,484).
+  - FTP checkpoints: 1,504 evaluated; the condition was met on 755. 613 triggered and 289 were blocked by an existing exit on the same decision (checkpoints can repeat both counts).
+- **Matched against H001 (1,486 matched; 193 only in H001; 322 only in H002):**
+  - Losses avoided: 244 H001 stop-hits closed by FTP, +115.0R / +$44,541 (mean +0.47R each).
+  - Winners sacrificed: 120 H001 winners closed by FTP, −100.7R / −$35,315 (112 giveback, 6 take-profit, 2 stop).
+  - Also: 134 H001 giveback losers closed by FTP, −19.1R / −$6,027.
+- **P&L bridge (exact):** −$7,197.67 = matched change +$911.54 + H002-only −$13,520.43 − H001-only (−$5,411.21).
+- **Overnight FTP:** 2 fills (both via the 16:00 path), −$721.09, 2 losses, 0 wins.
+- **Gates:**
+  - D1 FAIL, D2 FAIL, D3 PASS, D4 FAIL, D5 FAIL.
+  - D6 FAIL: MARA is the only positive symbol, 100% of a $1,380.59 pool.
+- **Outcome:** progression to validation **FAIL**, so H002 is REJECTED_AT_DEVELOPMENT. Validation, known and forward were never run. No variants will be tested under this ID.
+- **Strategy behavior changed:** No live behavior changed.

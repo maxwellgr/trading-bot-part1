@@ -206,13 +206,13 @@
     },
     {
       "id": "STRATEGY_V2_HYPOTHESIS_002",
-      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "status": "REJECTED_AT_DEVELOPMENT",
       "created": "2026-09-25",
       "description": "Identical to frozen H001 (entries, risk, management, execution) plus ONE rule: Failure-to-Progress exit at the 3rd post-fill 5Min close if close-based MFE < +0.25R and close <= entry fill.",
       "base": "STRATEGY_V2_HYPOTHESIS_001",
       "spec_document": "research/strategy_v2_hypothesis_002.md",
       "spec_commit": "0bd6d95d4521c2ce8a2e65a873fb1facc9db3b61",
-      "code_commit": null,
+      "code_commit": "uncommitted working tree on top of 903931d (src/strategy_v2_h002.py, src/research_h002.py); must be committed and recorded before FROZEN",
       "timeframe": "5Min (as H001)",
       "parameters": {
         "inherits": "all STRATEGY_V2_HYPOTHESIS_001 parameters unchanged",
@@ -257,14 +257,40 @@
         "overnight FTP metrics: overnight_ftp_fills, overnight_ftp_realized_pnl, overnight_ftp_losses, overnight_ftp_wins (+ breakevens, by checkpoint path); overnight = NY fill date != NY FTP decision date"
       ],
       "contamination": "H002 DEVELOPMENT is NOT an independent test: the 3-bar and +0.25R constants were derived from H001 analysis on the same DEVELOPMENT split; development is a screening/resubstitution check only. The first untouched test is VALIDATION, viewable once only after H002 is completely frozen.",
-      "development_result": null,
+      "development_result": {
+        "ref": "data/research_v1/h002_development/h002_report.json",
+        "run_at_code": "903931df571bfa0bac972b298d1499aeb1164ed5",
+        "working_tree_dirty": true,
+        "evidence": "screening/resubstitution only",
+        "trades": 1808,
+        "expectancy_r": -0.06894962139849416,
+        "profit_factor": 0.7263587091129194,
+        "total_r": -124.66091548847744,
+        "max_drawdown_pct": -49.605674164170644,
+        "realized_pnl_closed_trades": -45210.38805750029,
+        "gates": {
+          "D1_expectancy_r": "FAIL",
+          "D2_profit_factor": "FAIL",
+          "D3_completed_trades": "PASS",
+          "D4_max_drawdown_pct": "FAIL",
+          "D5_total_r": "FAIL",
+          "D6_symbol_concentration": "FAIL"
+        },
+        "d6": {
+          "positive_pool": 1380.5948824999944,
+          "max_share_symbol": "MARA",
+          "max_share": 1.0
+        },
+        "ftp_off_reproduces_h001": true,
+        "progression_to_validation": "FAIL"
+      },
       "frozen_date": null,
       "validation_viewed_at": null,
       "validation_viewed_before_parameter_changes": null,
       "validation_result": null,
       "known_period_result": null,
       "forward_notes": [],
-      "notes": "One frozen test. No alternative bar counts or thresholds may be tested under this ID.",
+      "notes": "One frozen test. No alternative bar counts or thresholds may be tested under this ID. Development gate FAILED on 2026-09-25 (D1, D2, D4, D5, D6); validation never run; H002 is closed.",
       "review_decisions": {
         "settled": "2026-09-25",
         "R1": "evaluate at 16:00 on 3rd close; pending exit at next available open; not skipped, not deferred",
@@ -278,6 +304,12 @@
         "approved": "2026-09-25",
         "frozen_spec_commit": "6b0ac231388c3a7bce9135782aab5af4d2576fd3",
         "note": "implementation may start only after the frozen spec document is committed; record that commit here"
+      },
+      "implementation": {
+        "engine": "src/strategy_v2_h002.py (FTPEngine research subclass; shared engine unchanged)",
+        "runner": "src/research_h002.py",
+        "tests": "tests/test_strategy_v2_h002.py",
+        "implemented": "2026-09-25"
       }
     }
   ]
