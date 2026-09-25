@@ -4,7 +4,7 @@
 |---|---|
 | Hypothesis ID | `STRATEGY_V2_HYPOTHESIS_002` |
 | Status | **SPECIFIED_NOT_IMPLEMENTED** — specification **FROZEN** (approved 2026-09-25); not to be implemented until this frozen spec is committed |
-| Frozen spec commit | _to be recorded after the user commits this document_ |
+| Frozen spec commit | `6b0ac231388c3a7bce9135782aab5af4d2576fd3` (`6b0ac23`, "docs: freeze h002 strategy specification") |
 | Date created | 2026-09-25 |
 | Spec written at commit | `0bd6d95d4521c2ce8a2e65a873fb1facc9db3b61` (`0bd6d95`, "docs: add frozen h001 strategy specification") |
 | Base | `STRATEGY_V2_HYPOTHESIS_001` (frozen; REJECTED_AT_DEVELOPMENT), spec `research/strategy_v2_hypothesis_001.md` |

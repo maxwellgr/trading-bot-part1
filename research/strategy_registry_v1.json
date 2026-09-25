@@ -276,7 +276,7 @@
       },
       "spec_frozen": {
         "approved": "2026-09-25",
-        "frozen_spec_commit": null,
+        "frozen_spec_commit": "6b0ac231388c3a7bce9135782aab5af4d2576fd3",
         "note": "implementation may start only after the frozen spec document is committed; record that commit here"
       }
     }
