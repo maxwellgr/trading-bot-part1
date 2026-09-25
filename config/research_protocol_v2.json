@@ -1,0 +1,349 @@
+{
+  "protocol_version": "research_protocol_v2",
+  "created": "2026-09-25",
+  "status": "REVIEW DECISIONS Q1-Q7 SETTLED 2026-09-25 (binding once this protocol is committed); see research/research_protocol_v2.md",
+  "supersedes_for_new_hypotheses": "research_protocol_v1",
+  "relationship_to_v1": "V1 (config/research_protocol_v1.json) is not modified and remains the protocol under which MA_BASELINE_V1 and H001-H004 were run and judged. V2 applies to H005 and later only. Splits, universe, execution defaults and the D1-D6 / V1-V4 gates are inherited unchanged; V2 adds a staged pre-portfolio admission process in front of the full portfolio backtest.",
+  "spec_document": "research/research_protocol_v2.md",
+  "universe": {
+    "symbols": [
+      "NVDA",
+      "AMD",
+      "PLTR",
+      "HOOD",
+      "MARA",
+      "INTC",
+      "MU",
+      "META"
+    ],
+    "timeframe": "declared per hypothesis",
+    "symbol_order_note": "Order is the live loop order and the same-timestamp tie-break in the backtester (inherited from V1)."
+  },
+  "data_source": {
+    "provider": "Alpaca Market Data API v2",
+    "endpoint": "GET https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+    "feed": "declared per hypothesis",
+    "adjustment": "raw (unless a hypothesis preregisters otherwise with a reason)",
+    "required_declarations": [
+      "PRIMARY_RESEARCH_FEED",
+      "INTENDED_LIVE_SIGNAL_FEED",
+      "SECONDARY_ROBUSTNESS_FEED (if available)",
+      "ADJUSTMENT",
+      "TIMEFRAME",
+      "DATE_RANGE"
+    ],
+    "feed_mixing": "never mix IEX and SIP bars inside one strategy run; separate caches; separate manifests/checksums",
+    "historical_note": "H001-H004 are historical experiments on IEX and are not rewritten.",
+    "feed_policy": {
+      "default": "PRIMARY_RESEARCH_FEED must match INTENDED_LIVE_SIGNAL_FEED",
+      "mismatch": "allowed only if preregistered and justified, naming the operationally authoritative feed; P5 is then mandatory",
+      "threshold_sensitive_rules": "P5 also applies when research and live feeds match, whenever a secondary feed is available",
+      "sip_role": "preferred high-quality comparison feed when legally available; primary only when the hypothesis intends SIP as its operational signal feed",
+      "sip_access_evidence": "historical SIP access confirmed on the existing account by the V1 sanity audit (KNOWN period); nothing purchased or bypassed"
+    }
+  },
+  "splits": [
+    {
+      "name": "warmup",
+      "role": "data_support",
+      "start": "2023-12-01",
+      "end": "2023-12-31",
+      "purpose": "Indicator warm-up and data support only. No results are reported for this window."
+    },
+    {
+      "name": "development",
+      "role": "development",
+      "start": "2024-01-02",
+      "end": "2025-12-31",
+      "purpose": "Hypothesis-generation territory (already conceptually contaminated by H001-H004 and the V1 diagnostics). Pre-portfolio screens and, if admitted, the full Development portfolio run."
+    },
+    {
+      "name": "validation",
+      "role": "validation",
+      "start": "2026-01-02",
+      "end": "2026-05-29",
+      "purpose": "First untouched strategy-level evaluation. Opened once, only after spec freeze, P1-P6 PASS, D1-D6 PASS, frozen implementation and recorded implementation commit."
+    },
+    {
+      "name": "known_diagnostic",
+      "role": "contaminated",
+      "start": "2026-06-01",
+      "end": "2026-09-23",
+      "purpose": "Permanently contaminated. Allowed for feed-robustness (Stage 4) and diagnostics; never validation."
+    },
+    {
+      "name": "forward",
+      "role": "forward",
+      "start": "2026-09-24",
+      "end": null,
+      "purpose": "Chronological paper observations only, after pre-portfolio, Development and Validation PASS. Never used for design."
+    }
+  ],
+  "execution_defaults": {
+    "fill_model": "next_bar_open",
+    "slippage_bps": 5.0,
+    "commission_per_fill": 0.0,
+    "initial_equity": 100000.0,
+    "canonical_cost_policy": "5 bps per side is canonical. It is never reduced because a strategy fails; changes require independent real-fill calibration evidence (section 17 of the V2 document)."
+  },
+  "benchmark_strategy": {
+    "id": "MA_BASELINE_V1",
+    "note": "Inherited unchanged from V1."
+  },
+  "workflow": [
+    "IDEA",
+    "SPECIFICATION_FREEZE",
+    "RAW_SIGNAL_SCREEN",
+    "MATCHED_RANDOM_CONTROL",
+    "ECONOMIC_SCALE_CHECK",
+    "FEED_ROBUSTNESS_CHECK",
+    "PRE_PORTFOLIO_ADMISSION",
+    "FULL_DEVELOPMENT_PORTFOLIO",
+    "DEVELOPMENT_GATES",
+    "FROZEN_IMPLEMENTATION",
+    "VALIDATION_ONCE",
+    "FORWARD"
+  ],
+  "stage0_spec_freeze": {
+    "must_freeze": [
+      "universe",
+      "feed",
+      "timeframe",
+      "indicators",
+      "entry_rules",
+      "exit_assumptions",
+      "signal_timing",
+      "warm_up",
+      "missing_data_handling",
+      "execution_assumptions",
+      "raw_signal_admission_criteria",
+      "primary_metric",
+      "supporting_metrics",
+      "forward_horizons",
+      "random_control_design",
+      "cost_scale_criteria",
+      "feed_robustness_criteria",
+      "development_gates",
+      "validation_gates",
+      "contamination_disclosure"
+    ],
+    "rule": "The spec is committed and its hash recorded before any hypothesis signal is calculated."
+  },
+  "raw_signal_screen": {
+    "portfolio_constraints": "none (no positions, leverage, halts, capital, symbol blocking)",
+    "entry": "next executable bar per the frozen spec",
+    "horizons": "preregistered per hypothesis (no universal default)",
+    "primary_cost_bps": 0.0,
+    "secondary_cost": "canonical",
+    "required_metrics": [
+      "raw_signal_count",
+      "valid_forward_observations",
+      "median_forward_return_r",
+      "mean_forward_return_r",
+      "mfe_r",
+      "mae_r",
+      "reach_plus_0_5r_pct",
+      "reach_plus_1r_pct",
+      "reach_minus_1r_pct",
+      "weak_forward_excursion_pct",
+      "symbol_distribution",
+      "time_of_day_distribution",
+      "atr_volatility_distribution"
+    ],
+    "weak_forward_excursion_default": "MFE at the primary horizon < +0.25R (a hypothesis may preregister another definition)"
+  },
+  "random_control": {
+    "required": true,
+    "default_matching": [
+      "same symbol",
+      "same calendar month",
+      "same 30-minute time-of-day bucket (on decision time)",
+      "same point-in-time ATR% quintile"
+    ],
+    "default_atr_quintile": "rank of ATR14%/close against the previous 1560 bars of the same symbol and timeframe-equivalent history, computed without future information (V1 audit convention, adapted to the hypothesis timeframe in its spec)",
+    "default_fallback_hierarchy": [
+      "L0 exact",
+      "L1 adjacent time bucket",
+      "L2 adjacent ATR quintile",
+      "L3 adjacent bucket + adjacent quintile",
+      "L4 same symbol+month+bucket any quintile",
+      "unmatched"
+    ],
+    "default_replicates": 200,
+    "default_seed_rule": "numpy default_rng(BASE_SEED + 1000*r + j), BASE_SEED preregistered per hypothesis",
+    "default_replacement": "with replacement; disclosed",
+    "default_exclusions": "all raw signal bars of the hypothesis are excluded from candidate pools",
+    "overmatching_rule": "do not match on variables derived from the strategy rule itself when that would erase the tested signal",
+    "freeze": "matching dimensions, buckets, fallback, replicate count, seeds, replacement and exclusions are frozen in the spec before outcomes"
+  },
+  "pre_portfolio_gates": {
+    "P1_sample_size": {
+      "counts": "VALID raw-signal forward observations (not merely emitted signals)",
+      "default_min_valid_forward_observations": 300,
+      "override": "a lower minimum only if preregistered with a structural-rarity reason before outcomes; never lowered afterwards"
+    },
+    "P2_primary_metric_vs_random": {
+      "primary_metric": "exactly one, named in the spec",
+      "cost_bps": 0.0,
+      "threshold": "real value at or above the 95th empirical percentile of the matched-random replicate distribution (for a lower-is-better metric: at or below the 5th)",
+      "percentile_definition": "empirical percentile = (count(random < real) + 0.5 * count(random == real)) / n * 100, over the non-null replicate values (n = their count); exact float comparison, no interpolation; for a lower-is-better metric the oriented percentile is 100 - that value; a missing real value or zero replicates gives no percentile (the gate is then FAIL)",
+      "percentile_method": "empirical percentile = (count(random < real) + 0.5 * count(random == real)) / n * 100, over the non-null replicate values (n = their count); exact float comparison, no interpolation; for a lower-is-better metric the oriented percentile is 100 - that value; a missing real value or zero replicates gives no percentile (the gate is then FAIL)",
+      "unmeasured": "FAIL"
+    },
+    "P3_supporting_metrics": {
+      "min_supporting_metrics_in_expected_direction": 2,
+      "expected_direction_definition": "direction-aware: the real value is strictly better than the matched-random replicate median in that metric's preregistered favorable direction",
+      "own_percentile_requirement": "none unless preregistered"
+    },
+    "P4_economic_scale": {
+      "successful_signal": "direction_normalized_forward_return_at_primary_horizon > 0 at 0 bps (long: price-direction return; short: its negation)",
+      "favorable_move": "direction-normalized MFE % at the preregistered primary horizon, median over successful signals",
+      "A": "roundtrip canonical friction % >= 0.25 x that median favorable move % (no measurable favorable move counts as A)",
+      "B": "recompute BOTH the real signals and the exact frozen matched-random controls at canonical cost; B holds when the real PRIMARY metric no longer satisfies the same P2 oriented-percentile requirement (>= 95) in its preregistered direction",
+      "descriptive_only": "if the primary metric is a signed return/expectancy, also report whether it is <= 0 at canonical cost (does not replace B)",
+      "rule": "FAIL iff A AND B",
+      "matching_design": "identical between 0 bps and canonical cost",
+      "stricter_criteria": "allowed if preregistered; never loosened after outcomes",
+      "unmeasured": "FAIL"
+    },
+    "P5_feed_robustness": {
+      "applies_to": "mandatory when PRIMARY_RESEARCH_FEED != INTENDED_LIVE_SIGNAL_FEED; also for threshold-sensitive rules (exact OHLC thresholds, crossovers, breakouts, close location, other price-sensitive boundaries) whenever a secondary feed is available",
+      "period": "known_diagnostic (contaminated) only; never validation",
+      "bands": {
+        "high_stability": ">= 0.90",
+        "acceptable_moderate": "0.80 <= J < 0.90",
+        "caution": "0.75 <= J < 0.80",
+        "material_sensitivity": "< 0.75"
+      },
+      "rule": "Jaccard < 0.75 fails unless the spec preregistered (1) why sensitivity is expected, (2) which feed is authoritative for research and live operation, (3) why the signal remains operationally meaningful",
+      "not_applicable": "only when derived from the frozen declarations (feeds match AND (rule not threshold-sensitive OR no secondary feed)); never used to leave an applicable gate unmeasured",
+      "mismatch_rule": "a research/live feed mismatch without a preregistered justification and operationally authoritative feed FAILS P5",
+      "unmeasured": "FAIL"
+    },
+    "P6_integrity": {
+      "requires": [
+        "data integrity audit PASS",
+        "no-look-ahead checks PASS",
+        "deterministic reproduction PASS"
+      ]
+    },
+    "failure_rule": "any mandatory P gate FAIL -> no full portfolio backtest; the hypothesis is closed under its ID",
+    "outcomes": "each of P1-P6 is recorded PASS / FAIL / NOT_APPLICABLE (NOT_APPLICABLE only for P5 as defined); any mandatory gate not measured is FAIL",
+    "status_rule": {
+      "basis": "stage-based, not gate-count-based",
+      "stages": {
+        "RAW_SIGNAL_SCREEN": [
+          "P1",
+          "P2",
+          "P3"
+        ],
+        "ECONOMIC_SCALE": [
+          "P4"
+        ],
+        "FEED_ROBUSTNESS": [
+          "P5"
+        ],
+        "INTEGRITY": [
+          "P6"
+        ]
+      },
+      "raw_signal_screen_only": "any combination of failures limited to P1/P2/P3 -> REJECTED_AT_RAW_SIGNAL_SCREEN",
+      "p4_only": "REJECTED_AT_ECONOMIC_SCALE",
+      "p5_only": "REJECTED_AT_FEED_ROBUSTNESS",
+      "multiple_stages": "failures spanning more than one distinct stage -> REJECTED_PRE_PORTFOLIO",
+      "p6": "any P6 failure, alone or combined -> REJECTED_PRE_PORTFOLIO",
+      "always_on_rejection": "pre_portfolio = REJECTED_PRE_PORTFOLIO plus P1-P6 PASS/FAIL/NOT_APPLICABLE"
+    }
+  },
+  "execution_sensitivity_precheck": {
+    "isolated_costs_bps": [
+      0.0,
+      2.5,
+      5.0,
+      7.5,
+      10.0
+    ],
+    "report": [
+      "isolated_expectancy_r",
+      "profit_factor",
+      "win_rate",
+      "approximate_break_even_bps"
+    ],
+    "role": "mandatory to run and report at the preregistered costs; NON-GATING evidence (P4 remains the economic admission gate)",
+    "gating": false
+  },
+  "development_gates": {
+    "D1": "expectancy R > 0",
+    "D2": "PF >= 1.10",
+    "D3": "completed trades >= 150",
+    "D4": "abs(max DD %) <= 25",
+    "D5": "total R > 0",
+    "D6": "P_s = realized P&L per tradable symbol; pool = sum max(P_s,0); PASS iff pool > 0 and max share <= 0.50 (exact); pool == 0 FAILS"
+  },
+  "validation_gates": {
+    "V1": "expectancy R > 0",
+    "V2": "PF > 1.0",
+    "V3": "total R > 0",
+    "V4": "max DD <= 30%",
+    "rule": "run once; no tuning after viewing; failure closes the hypothesis"
+  },
+  "statuses": [
+    "SPECIFIED_NOT_IMPLEMENTED",
+    "RAW_SCREEN_RUNNING",
+    "REJECTED_AT_RAW_SIGNAL_SCREEN",
+    "REJECTED_AT_ECONOMIC_SCALE",
+    "REJECTED_AT_FEED_ROBUSTNESS",
+    "REJECTED_PRE_PORTFOLIO",
+    "PRE_PORTFOLIO_PASS",
+    "REJECTED_AT_DEVELOPMENT",
+    "DEVELOPMENT_PASS_VALIDATION_NOT_RUN",
+    "REJECTED_AT_VALIDATION",
+    "VALIDATION_PASS_FORWARD_NOT_STARTED",
+    "FORWARD_TESTING"
+  ],
+  "benchmark_layers": [
+    "A market/drift baseline",
+    "B matched random entries",
+    "C real raw strategy signals",
+    "D executable portfolio strategy"
+  ],
+  "contamination_notes": [
+    "Development (2024-01-02 -> 2025-12-31) has been explored by MA_BASELINE_V1, H001-H004, several autopsies and Research Sanity Audit V1; every new hypothesis must disclose which Development findings motivated it and which thresholds came from them.",
+    "known_diagnostic (2026-06-01 -> 2026-09-23) remains permanently contaminated; it was also used for the IEX-vs-SIP comparison.",
+    "Validation (2026-01-02 -> 2026-05-29) has not been viewed by any strategy; broad public macro knowledge of the period exists and is disclosed per hypothesis."
+  ],
+  "hygiene_rules": [
+    "Never tune on validation after viewing validation results.",
+    "Any meaningful rule change after any stage has been viewed creates a new hypothesis ID; no salvage under the same ID.",
+    "The known diagnostic period remains contaminated permanently.",
+    "Forward observations are chronological, never back-filled, never used for design.",
+    "Do not select symbols because they performed well in validation.",
+    "No post-hoc metric switching: the preregistered primary metric controls admission; all metrics are reported.",
+    "Report development, validation, contaminated and forward evidence separately; never merge them into one score.",
+    "Never mix feeds inside one strategy run.",
+    "Canonical cost is never reduced because a strategy fails."
+  ],
+  "passive_long_baseline": {
+    "global_definition": null,
+    "rule": "optional diagnostic; if a hypothesis uses one, its entry schedule, symbols, holding/management convention, costs and sample period are preregistered in that hypothesis before outcomes. Matched random remains the mandatory timing baseline."
+  },
+  "validation_feed_access": "no Validation-period SIP or any other Validation feed is downloaded or read until: spec frozen, P1-P6 all mandatory gates PASS, D1-D6 all PASS, implementation frozen, frozen implementation commit recorded",
+  "registry_rule": "when H005 is created: tag its entry with research_protocol_v2 and add the V2 statuses to the registry schema/allowed values; H001-H004 are preserved exactly as historical V1 research (no relabel, no re-evaluation)",
+  "review_decisions": {
+    "settled": "2026-09-25",
+    "Q1": "approved with modification: research feed matches intended live feed by default; mismatch preregistered + justified + authoritative feed + mandatory P5; SIP primary only if it is the intended operational feed",
+    "Q2": "approved with modification: direction-normalized success and favorable move; B = primary fails the same P2 percentile rule vs the same frozen random controls recomputed at canonical cost; signed <= 0 descriptive only",
+    "Q3": "approved: isolated execution precheck mandatory to report, non-gating",
+    "Q4": "approved; clarified 2026-09-25: stage-based status (P1-P3 failures only -> REJECTED_AT_RAW_SIGNAL_SCREEN; P4 only -> REJECTED_AT_ECONOMIC_SCALE; P5 only -> REJECTED_AT_FEED_ROBUSTNESS; more than one distinct stage or any P6 failure -> REJECTED_PRE_PORTFOLIO); umbrella field and per-gate outcomes always recorded",
+    "Q5": "no global scheduled-entry baseline; optional and fully preregistered per hypothesis",
+    "Q6": "approved: no Validation-period feed access before spec freeze, P1-P6 PASS, D1-D6 PASS, frozen implementation and recorded commit",
+    "Q7": "approved: tag H005 with research_protocol_v2 and extend registry statuses when H005 is created; H001-H004 untouched",
+    "clarifications": [
+      "P1 counts valid forward observations",
+      "P2 percentile/tie convention frozen as implemented and tested",
+      "P3 is direction-aware",
+      "P5 NOT_APPLICABLE only when genuinely not applicable under V2",
+      "any unmeasured mandatory gate is FAIL"
+    ]
+  }
+}

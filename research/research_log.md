@@ -482,3 +482,48 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Other rates:** win rate, immediate-failure, stop, giveback, take-profit and scale-out rates stay close to random. Real is slightly worse on some: H001 immediate failures 98.5th percentile, H003 take-profit 0.5th percentile.
 - **Conclusion (descriptive):** matched random entries generate about the same gross edge at 0 bps. The positive 0 bps expectancy is consistent with long-market drift plus shared management, not signal alpha.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — Research Protocol V2 proposed (staged pre-portfolio admission)
+
+- **Documents:** `research/research_protocol_v2.md`, `config/research_protocol_v2.json`. V1 is unchanged and remains the protocol for MA_BASELINE_V1 and H001–H004, which are not relabelled.
+- **Reason:** V1 allowed full portfolio backtests before the raw signal had shown information. The V1 sanity audit found no signal-over-random edge for H001/H003: the 0 bps gross edge matched random entries. It also found break-even at about 2.3–2.6 bps and IEX-vs-SIP raw-signal Jaccard of 0.69 / 0.62.
+- **New workflow:** spec freeze → raw signal screen (0 bps) → matched random control (200 deterministic replicates by default) → economic scale → feed robustness (KNOWN only) → P1–P6 admission → only then the full Development portfolio run (D1–D6 unchanged) → Validation once (V1–V4 unchanged) → Forward.
+- **Default gates:**
+  - P1: ≥ 300 valid raw signals.
+  - P2: the preregistered primary metric is at or above the 95th percentile of matched random.
+  - P3: at least 2 supporting metrics beat the random median.
+  - P4: fails if friction ≥ 25% of the median successful favorable move AND the advantage disappears at canonical cost.
+  - P5: Jaccard ≥ 0.75 for threshold-sensitive rules, unless a preregistered exception exists.
+  - P6: integrity, no look-ahead and reproducibility.
+- **Policies:**
+  - SIP is the preferred research feed when legally available; feeds are never mixed.
+  - Canonical cost stays at 5 bps and is never lowered because a strategy fails; any change needs real-fill calibration.
+  - No salvage under the same hypothesis ID.
+- **Tooling:** `src/preportfolio_screen.py` (gate evaluators and admission; it refuses a full portfolio run without PRE_PORTFOLIO_PASS), with 25 tests.
+- **Status:** PROPOSED. Review questions Q1–Q7 are open. No H005, no strategy outcomes run, Validation and Forward untouched.
+- **Strategy behavior changed:** No.
+
+## 2026-09-25 — Research Protocol V2 review decisions Q1–Q7 settled (documentation and tooling only)
+
+- **Q1 feed policy:** PRIMARY_RESEARCH_FEED must match INTENDED_LIVE_SIGNAL_FEED by default.
+  - A mismatch must be preregistered and justified, must name the authoritative feed, and makes P5 mandatory.
+  - Threshold-sensitive rules still need P5 when a secondary feed exists.
+  - SIP is the preferred comparison feed, and primary only if it is the intended operational feed.
+- **Q2 P4:**
+  - Success = direction-normalized forward return at the primary horizon > 0 at 0 bps.
+  - The favorable move is the direction-normalized MFE %.
+  - B = the primary metric fails the same P2 percentile rule against the same frozen random controls, both recomputed at canonical cost. "≤ 0 at canonical cost" is descriptive only.
+- **Q3:** the isolated execution precheck is mandatory to report and non-gating.
+- **Q4:** most specific single-stage status. REJECTED_PRE_PORTFOLIO when P6 fails or more than one stage fails. The umbrella field and per-gate PASS/FAIL/NOT_APPLICABLE are always recorded.
+- **Q5:** no global scheduled-entry baseline; optional baselines are preregistered per hypothesis.
+- **Q6:** no Validation-period feed access before spec freeze, P1–P6 PASS, D1–D6 PASS, frozen implementation and recorded commit.
+- **Q7:** H005 will be tagged research_protocol_v2 and registry statuses extended then; H001–H004 untouched.
+- **Clarifications:**
+  - P1 counts valid forward observations.
+  - The P2 percentile/tie convention is frozen as implemented and tested.
+  - P3 is direction-aware.
+  - P5 NOT_APPLICABLE is derived only from the frozen declarations.
+  - Any unmeasured gate is FAIL.
+- **Files:** `research/research_protocol_v2.md`, `config/research_protocol_v2.json`, `src/preportfolio_screen.py`, `tests/test_preportfolio_screen.py`.
+- **Not done:** no H005, no strategy outcomes, no Validation or Forward. V1, the registry and H001–H004 are unchanged.
+- **Strategy behavior changed:** No.
