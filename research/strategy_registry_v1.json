@@ -421,6 +421,111 @@
         "implemented": "2026-09-25",
         "shared_code_changed": false
       }
+    },
+    {
+      "id": "STRATEGY_V2_HYPOTHESIS_004",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "created": "2026-09-25",
+      "description": "H003 (frozen, unchanged) plus an entry-only SPY broad-market regime gate: an H003 raw BUY proceeds to the existing H003/RiskManager path only if the latest completed regular-session 15Min SPY bar has close > EMA50 and EMA50 3-bar slope > 0. SPY is context only (never traded, sized, in P&L or in D6). No new exit; management unchanged.",
+      "parent": "STRATEGY_V2_HYPOTHESIS_003 (frozen spec 6eb6078719d12e50542d7284d6e96f598c115f71; REJECTED_AT_DEVELOPMENT)",
+      "spec_document": "research/strategy_v2_hypothesis_004.md",
+      "spec_commit": "5bba9da3d6290ac770ce14896d30dc9b9e3d224e",
+      "code_commit": null,
+      "timeframe": "stock signal: H003 5Min regular session; context: SPY 15Min regular session resampled from audited 1Min IEX raw",
+      "parameters": {
+        "base_strategy": "frozen H003, unchanged (signal, consumption, re-arm, universe, risk, management, execution)",
+        "context_symbol": "SPY (context only; not tradable; excluded from limits, sizing, P&L and D6)",
+        "context_source": "Alpaca v2 stock bars, feed=iex, adjustment=raw, 1Min; no silent SIP switch (stop and report if insufficient)",
+        "context_timeframe": "15Min regular-session buckets anchored at 09:30 ET; early close ends 13:00; empty bucket -> no bar; no interpolation",
+        "context_support_bars_before_each_split": 200,
+        "regime_ema_span": 50,
+        "regime_slope_bars": 3,
+        "regime_positive": "close_R > EMA50_R and EMA50_R - EMA50_{R-3} > 0 (both strict)",
+        "alignment": "R* = latest same-session SPY 15Min bucket with end <= stock decision time D (= signal bar start + 5min); never a partially formed bucket",
+        "missing_context": "R* absent -> UNAVAILABLE -> blocked (MARKET_REGIME_UNAVAILABLE); no older-bucket substitution, no fabrication",
+        "gate_placement": "after H003 raw BUY, before open-position/halt checks and RiskManager; negative -> MARKET_REGIME_BLOCKED; blocked signals never reach RiskManager",
+        "setup_consumption": "H003 setup consumed on raw BUY emission regardless of gate result (pass/blocked/unavailable); H003 re-arm unchanged",
+        "exit_signal": "none; regime is entry-only",
+        "execution": {
+          "fill_model": "next_bar_open",
+          "slippage_bps": 5.0,
+          "commission_per_fill": 0.0
+        },
+        "context_indicator_convention": "inherit H003 own-window EMA exactly (200 bars ending at each bar, expanding when fewer), including split-boundary behavior; reuse H003 helper; no special seed, no SPY-specific EMA (Q1)",
+        "context_bucket_exists": ">= 1 valid regular-session 1Min SPY bar; no minimum count (Q2)",
+        "context_slope_window": "R-3 = three existing completed SPY 15Min bars back; may span a missing bucket (Q2)",
+        "context_download_range": "support + DEVELOPMENT only (2023-12-01 -> 2025-12-31); validation-range SPY not downloaded/inspected/cached unless dev gates all pass AND implementation frozen AND frozen commit recorded (Q3)",
+        "context_manifest": "research/context_manifest_spy_v1.json; stock manifest research/historical_manifest_v1.json unchanged (Q4)",
+        "diagnostics_only": [
+          "spy_slope_windows_spanning_missing_bucket"
+        ],
+        "gate_disabled_mode": "tests and pre-run H003 byte-identical reproduction check only; no CLI/public flag; mismatch aborts official H004 development run (Q7)"
+      },
+      "preregistered_gates": {
+        "development_5bps": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gte": 1.1,
+          "completed_trades_gte": 150,
+          "max_drawdown_pct_lte": 25,
+          "total_r_gt": 0,
+          "max_symbol_share_of_positive_pnl_lte": 0.5
+        },
+        "d6_definition": "P_s = sum realized_pnl of completed trades per tradable symbol (8 symbols; SPY never included); pool = sum max(P_s,0); pass iff pool > 0 and max(max(P_s,0)/pool) <= 0.50 (exact, no rounding); pool == 0 -> FAIL (undefined, empty positive pool)",
+        "validation_5bps_once": {
+          "expectancy_r_gt": 0,
+          "profit_factor_gt": 1.0,
+          "total_r_gt": 0,
+          "max_drawdown_pct_lte": 30
+        }
+      },
+      "contamination": "Development is hypothesis-development evidence (motivated by already-viewed H001/H002/H003 development research and the shared management autopsy); parent H003 development results are known; 15Min SPY timeframe chosen a priori, EMA50/3-bar slope reuse H003 concepts, nothing fitted; general public macro knowledge of 2024-2026 index behavior exists, so Validation is not blind at the macro level; Validation is the first untouched test.",
+      "data_requirements": "SPY 1Min IEX raw under gitignored data/; manifest research/context_manifest_spy_v1.json (source endpoint, feed=iex, adjustment=raw, requested range, actual first/last timestamp, checksum, row count, session coverage, duplicate/out-of-order counts, OHLC integrity, support-bar availability). Hard-fail before H004 development if: (1) structural/integrity checks fail; (2) < 200 valid pre-development SPY 15Min support bars; (3) any required regular session in development has zero usable regular-session SPY 1Min bars (required session = any Development calendar date on which at least one of the eight tradable symbols has at least one valid regular-session bar in the existing stock cache; Q8). Partial missing buckets within a present session never fail the audit; handled only by MARKET_REGIME_UNAVAILABLE and reported. No percentage coverage threshold.",
+      "development_result": null,
+      "frozen_date": null,
+      "validation_viewed_at": null,
+      "validation_viewed_before_parameter_changes": null,
+      "validation_result": null,
+      "known_period_result": null,
+      "forward_notes": [],
+      "notes": "Proposed 2026-09-25 at 5bba9da. Q1-Q8 settled 2026-09-25. No implementation, no SPY data downloaded or read, no H004 run. Failure of any development gate -> REJECTED_AT_DEVELOPMENT; any follow-up is H005.",
+      "review_decisions": {
+        "settled": "2026-09-25",
+        "Q1": "approved: inherit H003 EMA convention exactly incl. split-boundary behavior",
+        "Q2": "approved as proposed: >=1 valid 1Min bar per bucket; only expected bucket checked; R-3 = existing bars; spanning-missing-bucket diagnostic only",
+        "Q3": "option A: support + development only; validation SPY unopened until dev pass + frozen implementation + recorded commit",
+        "Q4": "approved: research/context_manifest_spy_v1.json; stock manifest untouched",
+        "Q5": "approved: weak_forward_excursion = 60m MFE < +0.25R; blocked and passed groups, all-valid and stateless RR+liquidity subsets",
+        "Q6": "approved: add B'; A + B + B' = H003 completed trades; C separate",
+        "Q7": "approved: gate-disabled mode for tests and pre-run reproduction check only; no bypass flag; abort on mismatch",
+        "documentation_correction": "H003 is not stateless within a session; raw signals are independent of portfolio state and every gate outcome consumes the setup, so the gate cannot alter the raw signal sequence (wording only)",
+        "Q8": "option (a) approved: required session = development date with >=1 valid regular-session bar for any of the 8 tradable symbols in the existing stock cache; list from stock cache only, before any SPY download, frozen; manifest records definition, count, dates/hash, excluded zero-coverage dates, zero-SPY and partial-gap sessions"
+      },
+      "shadow_diagnostic": "descriptive only: reconstruct_risk_ps/shadow_fixed_horizon convention; all MARKET_REGIME_BLOCKED and all regime-passed raw signals; each reported (A) all valid observations, (B) stateless RR + liquidity subset (no portfolio-state constraints); weak_forward_excursion = 60m shadow MFE < +0.25R (Q5)",
+      "path_decomposition": "match (symbol, raw H003 signal-bar timestamp); A = H003 trade also taken by H004 from same signal; B = H003 trade whose raw signal was MARKET_REGIME_BLOCKED/UNAVAILABLE; B' = H003 trade whose signal passed the gate but H004 path blocked/rejected downstream; C = H004 trade not in H003; A + B + B' = H003 completed trades; C separate (Q6)",
+      "required_session_rule": {
+        "definition": "Any Development calendar date for which at least one of the eight tradable symbols has at least one valid regular-session bar in the existing stock cache.",
+        "tradable_symbols": [
+          "NVDA",
+          "AMD",
+          "PLTR",
+          "HOOD",
+          "MARA",
+          "INTC",
+          "MU",
+          "META"
+        ],
+        "derivation": "stock cache only; created before any SPY download/inspection; independent of H004 outcomes and of whether an H003 raw signal occurs; frozen for the H004 Development audit; no external exchange calendar adds zero-coverage dates",
+        "zero_spy_bars_in_required_session": "SPY audit hard-fails",
+        "partial_spy_gaps_in_required_session": "no hard fail; affected decisions handled only by MARKET_REGIME_UNAVAILABLE",
+        "manifest_fields": [
+          "required_session_definition",
+          "required_session_count",
+          "required_session_dates (or deterministic hash of the list)",
+          "excluded_zero_stock_coverage_dates",
+          "required_sessions_with_zero_spy_data",
+          "required_sessions_with_partial_spy_gaps"
+        ]
+      }
     }
   ]
 }

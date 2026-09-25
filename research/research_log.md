@@ -334,3 +334,47 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
   - **Differences:** H003 reached +1R less often (13.4 vs 16.1%), reached +0.25R later (15 vs 10 min), and took fewer take profits (3.1 vs 3.9%). Overnight: 41 trades at +0.855R (H001) vs 27 at +0.299R (H003). Every CLES comparing the two distributions was 0.49–0.53.
 - **Conclusion (descriptive):** Both entry families produce nearly identical excursion distributions. The shared RiskManager and management layer normalizes geometry (2 ATR stop, 3 ATR target, implicit ATR% floor) and yields the same payoff profile: about 47% immediate failures that lose about 0.55R each on average, against modest giveback captures. Detection-to-fill latency is a small share of stop losses. No rule was derived; no H004 was created.
 - **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_004 specified (H003 + SPY broad-market regime gate)
+
+- **Event:** specification only, written at `5bba9da`. Status SPECIFIED_NOT_IMPLEMENTED. Spec: `research/strategy_v2_hypothesis_004.md`; registry entry added.
+- **Hypothesis:** some H003 breakouts fail because the broad market is not in an upward regime. Requiring a positive SPY regime before an H003 BUY may reduce immediate failures, with the stock signal and management unchanged.
+- **Single change versus H003:** an entry-only gate. The H003 raw BUY proceeds to the existing path only if the latest **completed** regular-session 15Min SPY bar (end ≤ decision time) has `close > EMA50` and `EMA50 − EMA50_{R−3} > 0`, both strict. Otherwise it is `MARKET_REGIME_BLOCKED`, or `MARKET_REGIME_UNAVAILABLE` if the expected bucket is missing (no older-bucket fallback). Blocked signals never reach the RiskManager. The setup is consumed on raw emission regardless of the gate. There is no new exit.
+- **SPY role:** context only; never traded, sized, in P&L or in D6. Alpaca IEX raw, 200 15Min support bars, no SIP switch.
+- **Gates:** D1–D6 and V1–V4 are unchanged from H001–H003.
+- **Contamination:** the motivation comes from already-viewed development research (shared management autopsy). The parent's development results are known, and general macro knowledge of 2024–2026 exists. Development is hypothesis-development evidence; validation is the first untouched test.
+- **Open review questions:** Q1–Q7 (EMA convention, bucket availability, SPY download range, manifest location, shadow definitions, path-decomposition groups, reproduction mode).
+- **Not done:** no implementation, no SPY download or read, no H004 run. Validation, known and forward untouched.
+- **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_004 review decisions (specification only)
+
+- **Settled Q1–Q7:**
+  - **Q1:** the SPY EMA inherits H003's own-window convention exactly, including split-boundary behavior.
+  - **Q2:** a bucket exists with at least one valid 1Min bar. Only the expected bucket is checked. `R−3` counts existing bars back. `spy_slope_windows_spanning_missing_bucket` is a diagnostic only.
+  - **Q3:** SPY is downloaded for support + development only. Validation-range SPY stays unopened until a development pass, a frozen implementation and a recorded commit.
+  - **Q4:** new `research/context_manifest_spy_v1.json`; the stock manifest is untouched.
+  - **Q5:** `weak_forward_excursion` = 60m shadow MFE < +0.25R. Blocked and passed groups are each reported for all valid observations and for the stateless RR + liquidity subset.
+  - **Q6:** path groups A / B / B′ / C, with A + B + B′ = H003 trades.
+  - **Q7:** a gate-disabled mode exists only for tests and the pre-run H003 reproduction check, with no bypass flag and an abort on mismatch.
+- **Wording correction:** H003 is not stateless within a session. The correct reason the gate cannot alter H003's raw signal sequence is now stated. Documentation only; no behavior change.
+- **SPY audit hard-fail rule, fixed before any SPY data is seen:** the audit fails on (1) structural/integrity failure, (2) fewer than 200 valid pre-development 15Min support bars, or (3) a required development session with zero usable SPY 1Min bars. Partial missing buckets never fail the audit; they are handled by `MARKET_REGIME_UNAVAILABLE`. There is no percentage threshold.
+- **Open:** Q8, the definition of a "required session", raised because of the known 2025-03-10 IEX gap.
+- **Status:** SPECIFIED_NOT_IMPLEMENTED. No implementation, no SPY download or read, no H004 run. Validation, known and forward untouched.
+- **Strategy behavior changed:** No.
+
+## 2026-09-25 — STRATEGY_V2_HYPOTHESIS_004 Q8 settled (specification only)
+
+- **Q8, option (a):** a required H004 development session is "any Development calendar date for which at least one of the eight tradable symbols has at least one valid regular-session bar in the existing stock cache."
+- **The list:**
+  - derived only from the stock cache, before any SPY download or inspection;
+  - independent of H004 outcomes and of whether H003 signals that day;
+  - frozen for the development audit;
+  - never extended with zero-coverage dates from an external exchange calendar.
+- **Consequences:**
+  - The 2025-03-10 all-stock IEX gap is excluded if the cache confirms zero bars for all eight symbols that day.
+  - A required session with zero SPY bars hard-fails the audit.
+  - Partial SPY gaps only trigger `MARKET_REGIME_UNAVAILABLE`.
+- **Manifest fields added to the spec:** `required_session_definition`, `required_session_count`, `required_session_dates` (or a hash of the list), `excluded_zero_stock_coverage_dates`, `required_sessions_with_zero_spy_data`, `required_sessions_with_partial_spy_gaps`.
+- **Status:** Q1–Q8 are all settled; SPECIFIED_NOT_IMPLEMENTED. No implementation, no SPY download or read, no H004 run. Validation, known and forward untouched.
+- **Strategy behavior changed:** No.
