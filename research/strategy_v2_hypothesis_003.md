@@ -4,6 +4,7 @@
 |---|---|
 | Hypothesis ID | `STRATEGY_V2_HYPOTHESIS_003` |
 | Status | **SPECIFIED_NOT_IMPLEMENTED** (review decisions Q1–Q5 settled 2026-09-25, §17) |
+| Frozen spec commit | `6eb6078719d12e50542d7284d6e96f598c115f71` (`6eb6078`, "docs: freeze h003 strategy specification") |
 | Date created | 2026-09-25 |
 | Spec written at commit | `ed4967a883de4a87846713bb329674470c2e1343` (`ed4967a`, "feat: add h001 opportunity autopsy") |
 | Signal family | **New.** It is neither H001's pullback-continuation family nor H002's FTP exit. |

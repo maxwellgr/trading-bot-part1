@@ -384,6 +384,9 @@
         "Q3": "approved: inherit H001 indicator semantics",
         "Q4": "approved: invalid ATR -> no signal, no fallback",
         "Q5": "approved: ATR_{T-1} for report normalization"
+      },
+      "spec_frozen": {
+        "frozen_spec_commit": "6eb6078719d12e50542d7284d6e96f598c115f71"
       }
     }
   ]
