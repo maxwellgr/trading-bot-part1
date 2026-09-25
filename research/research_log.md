@@ -227,3 +227,31 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
   - D6 FAIL: MARA is the only positive symbol, 100% of a $1,380.59 pool.
 - **Outcome:** progression to validation **FAIL**, so H002 is REJECTED_AT_DEVELOPMENT. Validation, known and forward were never run. No variants will be tested under this ID.
 - **Strategy behavior changed:** No live behavior changed.
+
+## 2026-09-25 — H001 DEVELOPMENT opportunity / signal-selection autopsy (diagnostic only)
+
+- **Question:** Does the portfolio's routing (RiskManager rejects, halts, symbol-already-open, same-timestamp competition) select better, worse or roughly random H001 opportunities?
+- **Scope and checks:** DEVELOPMENT only; bars loaded to 2025-12-31. The H001 rerun was byte-identical to the stored run.
+- **Method:**
+  - Shadow outcomes are counterfactual only: entry at the next bar's open + 5 bps, R_ps reconstructed exactly (1,679 of 1,679 match), close-based 15/30/60-minute and end-of-session horizons.
+  - Isolated shadow trades use the unchanged engine in an empty single-symbol portfolio. They were validated on all 1,679 accepted trades (entry, exit reason and R all identical).
+- **Results (DEVELOPMENT EVIDENCE):**
+  - **Routes:** accepted 1,679; daily-profit halt 3,123; RR 1,984; loss-streak 1,626; liquidity 1,069; symbol already open 777; leverage 210; max positions 23.
+  - **Leverage rejects:** isolated expectancy −0.061R (PF 0.82), essentially the same as accepted (−0.059R, PF 0.81).
+  - **Max-position rejects:** +0.053R (n=23, too small to interpret).
+  - **Halts:** 68–69% of halt-blocked signals would have been rejected by the RR or liquidity check anyway. These signals are mostly afternoon and low-ATR (median ATR% 0.26 vs 0.50 accepted).
+    - Of the rest, isolated expectancy is −0.094R (profit halt, n=987) and −0.184R (loss streak, n=500), versus −0.059R accepted.
+    - Halt signals are conditional on prior outcomes, so they are not independent samples.
+  - **RR and liquidity rejects:** low ATR%, afternoon. Their fixed-horizon MFE and MAE are both larger in R units (small R); end-of-session R is −0.04 (RR) and −0.07 (liquidity); exit costs are excluded.
+  - **Symbol-already-open:** the eventual host trade won in 362 cases and lost in 415; repeat-signal rate per held bar 0.066 (winners) vs 0.070 (losers). There is no sign that these signals confirm good positions.
+  - **Same-timestamp competition:** 787 groups, 72 of them with both an acceptance and a capacity rejection. In those, accepted trades averaged +0.203R versus a +0.043R isolated shadow for the rejected ones.
+  - **Ex-post regret** (future information; not a rule): by 60-minute MFE, the best rejected candidate beat the accepted one in 52.8% of groups; median realized-R regret −0.11R.
+  - **Processing order:** acceptance falls with rank in the group (39.7% at rank 1 to about 10% at ranks 4–5) without better outcomes at early ranks. Capacity rejects are only 233 of 4,965 risk decisions.
+  - **H002 path divergence:** of the 322 H002-only trades, 171 (−$9,630, −28.4R) were H001 symbol-already-open signals, i.e. re-entries into a symbol after FTP closed the first position. 97 (−$3,176) were H001 profit-halt-blocked.
+- **Conclusion (descriptive):**
+  - Within capacity-constrained competition, allocation looks roughly random to slightly favorable.
+  - Leverage-rejected signals look like accepted ones.
+  - Halt-blocked signals that passed the RR and liquidity checks were on average weaker than accepted signals, confounded by time of day.
+  - H002's damaging path divergence came mainly from same-symbol re-entries.
+  - No rule was derived; no H003 was created.
+- **Strategy behavior changed:** No.
