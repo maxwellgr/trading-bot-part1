@@ -438,3 +438,34 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Post-run reporting correction:** `exit_rates` used labels that don't match the engine's exit codes. It was recomputed from the stored trades.json with no re-run and no metric changed.
 - **Outcome:** progression to validation **FAIL**, so H004 is REJECTED_AT_DEVELOPMENT. Validation, known and forward were never run, and validation-range SPY was never downloaded. Any follow-up is H005.
 - **Strategy behavior changed:** No live behavior changed.
+
+## 2026-09-25 — Research Sanity Audit V1 (diagnostic only; no H005)
+
+- **Scope:**
+  - H001/H003 strategy diagnostics on DEVELOPMENT only.
+  - IEX-vs-SIP comparison on KNOWN (2026-06-01 → 2026-09-23) only.
+  - Validation and forward untouched.
+  - Module `src/research_sanity_audit.py`; outputs in `data/research_v1/research_sanity_audit_v1/`.
+- **Reproduction:**
+  - H001 and H003 development reproduced byte-identically.
+  - The portfolio-free raw-signal generator matched the engine exactly (10,491 / 4,497 signals).
+- **Execution (full portfolio reruns, 0 / 2.5 / 5 / 7.5 / 10 / 15 bps):**
+  - H001 expectancy +0.063 / +0.002 / −0.059 / −0.117 / −0.164 / −0.258R.
+  - H003 expectancy +0.051 / −0.004 / −0.061 / −0.109 / −0.158 / −0.268R.
+  - Descriptive break-even (linear interpolation): H001 ≈ 2.6 bps per side, H003 ≈ 2.3 bps per side. Not an achievable-fill claim.
+- **Raw signals vs 200 matched-random controls (0 bps; same symbol / month / 30-minute bucket / point-in-time ATR% quintile):**
+  - Real signals are **not** superior.
+  - Median 60m return R sits at the 1.0 / 1.5 percentile of the random replicates for H001 / H003.
+  - Weak-forward-excursion rate sits at the 100th percentile, i.e. worse than random.
+  - The isolated same-management trade test at 5 bps gives real −0.089 / −0.060R vs a random median of −0.088 / −0.070R.
+- **Risk stages:**
+  - H001 vs H003 are already nearly indistinguishable at the raw stage: max |CLES − 0.5| = 0.024; 0.017 at stage 2 and 0.015 at stage 3.
+  - No risk-filter compression by the predeclared criterion.
+  - The stateless RR / liquidity filters mainly shift volatility and cost geometry (CLES for ATR% ≈ 0.90) with no directional improvement (CLES for 60m return ≈ 0.50).
+- **Feed (KNOWN):**
+  - SIP was available on the existing account, and every file passed integrity checks.
+  - 5Min bar overlap was ~100%. Median 5Min close difference was 0.5–3.9 bps (P95 2.6–16.4 bps).
+  - Raw-signal Jaccard IEX vs SIP: H001 0.69, H003 0.62 → DATA_FEED_SENSITIVE (predeclared band).
+- **Labels (predeclared matrix):** H001 and H003 both get SIGNAL_EDGE_TOO_SMALL_FOR_COST (positive at 0 bps, negative at 5 bps) and DATA_FEED_SENSITIVE. No RISK_FILTER_COMPRESSION.
+- **Caveat:** the 0 bps gross edge is not attributable to signal selection, because matched random entries show equal or better forward returns.
+- **Strategy behavior changed:** No.
