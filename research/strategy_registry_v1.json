@@ -588,7 +588,7 @@
       "created": "2026-09-27",
       "description": "Long-only. At the close of a completed 30Min RTH bar (decision 11:00 ET to scheduled close - 60 min), first bar per symbol/session where the stock is up on the session (A), outperforms SPY over the identical session window (B) and makes a new session closing high (C). Hypothesis: superior typical 60-minute forward continuation vs matched random 30Min bars.",
       "spec_document": "research/strategy_v2_hypothesis_005.md",
-      "spec_commit": null,
+      "spec_commit": "29e564810d3c7b82fa467ccc9dfaa362d071b9ad",
       "code_commit": null,
       "feeds": {
         "PRIMARY_RESEARCH_FEED": "iex",
