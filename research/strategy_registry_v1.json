@@ -7,7 +7,7 @@
   },
   "entry_schema": {
     "id": "string, unique",
-    "status": "SPECIFIED_NOT_IMPLEMENTED | IMPLEMENTED | DEVELOPMENT_REVIEWED | FROZEN | VALIDATION_VIEWED | REJECTED_AT_DEVELOPMENT | REJECTED_AT_VALIDATION | FORWARD_PAPER | RETIRED (legacy lowercase 'frozen' = FROZEN)",
+    "status": "SPECIFIED_NOT_IMPLEMENTED | IMPLEMENTED | DEVELOPMENT_REVIEWED | FROZEN | VALIDATION_VIEWED | REJECTED_AT_DEVELOPMENT | REJECTED_AT_VALIDATION | FORWARD_PAPER | RETIRED (legacy lowercase 'frozen' = FROZEN) || research_protocol_v2 entries: SPECIFIED_NOT_IMPLEMENTED | RAW_SCREEN_RUNNING | REJECTED_AT_RAW_SIGNAL_SCREEN | REJECTED_AT_ECONOMIC_SCALE | REJECTED_AT_FEED_ROBUSTNESS | REJECTED_PRE_PORTFOLIO | PRE_PORTFOLIO_PASS | REJECTED_AT_DEVELOPMENT | DEVELOPMENT_PASS_VALIDATION_NOT_RUN | REJECTED_AT_VALIDATION | VALIDATION_PASS_FORWARD_NOT_STARTED | FORWARD_TESTING",
     "description": "what the hypothesis is and why (written BEFORE looking at validation)",
     "code_commit": "git commit hash of the exact code evaluated (clean tree)",
     "parameters": "object: every parameter that differs from production defaults, plus the ones under test",
@@ -21,7 +21,8 @@
     "notes": "free text",
     "spec_document": "path to the pre-registration document (rules, constants, gates)",
     "preregistered_gates": "development/validation gates recorded before any result",
-    "review_decisions": "design questions settled before implementation (date + decisions); part of the frozen spec"
+    "review_decisions": "design questions settled before implementation (date + decisions); part of the frozen spec",
+    "protocol": "optional per entry: research protocol governing the entry; absent = registry-level protocol (research_protocol_v1). Entries tagged research_protocol_v2 use the V2 statuses and pre-portfolio gates P1-P6."
   },
   "entries": [
     {
@@ -576,6 +577,56 @@
         "implemented": "2026-09-25",
         "shared_code_changed": false
       }
+    },
+    {
+      "id": "STRATEGY_V2_HYPOTHESIS_005",
+      "name": "30Min relative-strength trend continuation",
+      "protocol": "research_protocol_v2",
+      "protocol_config": "config/research_protocol_v2.json",
+      "protocol_frozen_commit": "565f7aa4b7e72a55780ecfe59ada805f166e4290",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "created": "2026-09-27",
+      "description": "Long-only. At the close of a completed 30Min RTH bar (decision 11:00 ET to scheduled close - 60 min), first bar per symbol/session where the stock is up on the session (A), outperforms SPY over the identical session window (B) and makes a new session closing high (C). Hypothesis: superior typical 60-minute forward continuation vs matched random 30Min bars.",
+      "spec_document": "research/strategy_v2_hypothesis_005.md",
+      "spec_commit": null,
+      "code_commit": null,
+      "feeds": {
+        "PRIMARY_RESEARCH_FEED": "iex",
+        "INTENDED_LIVE_SIGNAL_FEED": "iex",
+        "SECONDARY_ROBUSTNESS_FEED": "sip",
+        "ADJUSTMENT": "raw",
+        "TIMEFRAME": "30Min RTH"
+      },
+      "parameters": {
+        "earliest_decision": "11:00 ET",
+        "latest_decision": "scheduled close - 60 min",
+        "signals_per_symbol_session": 1,
+        "conditions": "A: C_X(T) > O_X(S); B: session return X - session return SPY > 0; C: C_X(T) > max earlier session closes (strict, no magnitude)",
+        "r": "2 x ATR14 on 30Min bars at T (no cost term)",
+        "primary_horizon": "60 min (E1 open -> E2 close)",
+        "costed_exit": "synthetic fixed-horizon research exit: open(E1)(1+c) -> close(E2)(1-c)",
+        "random_control": "same symbol, month, decision time, point-in-time 30Min ATR% quintile (260-value rank); L0-L4; 200 replicates; BASE_SEED 20260925; with replacement; suppressed qualifiers stay in pool",
+        "populations": "P1 on valid_real_population; P2/P3/P4-B only on matched_real_population"
+      },
+      "preregistered_gates": {
+        "P1": "valid observations >= 300",
+        "P2": "median fwdR_60 at 0 bps on matched_real_population, oriented percentile >= 95 vs 200 matched-random replicate medians",
+        "P3": ">= 2 of 3 strictly better than replicate median: mean fwdR_60 (higher), median MFE_60 (higher), median MAE_60 (lower)",
+        "P4": "FAIL iff A (0.10% >= 0.25 x median successful favorable move %) AND B (P2 percentile < 95 recomputed at 5 bps on same population and draws)",
+        "P5": "mandatory; KNOWN IEX vs SIP raw-signal Jaccard >= 0.75; no exception",
+        "P6": "integrity, manifests/checksums, SPY KNOWN audit, no look-ahead, deterministic reproduction",
+        "development": "D1-D6 (Research Protocol V2, unchanged)",
+        "validation": "V1-V4 (Research Protocol V2, unchanged)"
+      },
+      "contamination": "Direction motivated by already-viewed H001-H004 Development results and Research Sanity Audit V1; H001/H003 time-of-day results previously viewed, so 11:00 is structural but not fully independent; no magnitude threshold from outcomes; Validation is the first untouched strategy-level evaluation.",
+      "pre_portfolio": null,
+      "gate_outcomes": null,
+      "development_result": null,
+      "frozen_date": null,
+      "validation_viewed_at": null,
+      "validation_result": null,
+      "forward_notes": [],
+      "notes": "Specification only. No implementation, no signals, no Development outcomes, no data downloads, no Validation/Forward."
     }
   ]
 }

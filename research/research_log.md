@@ -527,3 +527,18 @@ Entries before 2026-09-24 13:00 ET were reconstructed on 2026-09-24 from commits
 - **Files:** `research/research_protocol_v2.md`, `config/research_protocol_v2.json`, `src/preportfolio_screen.py`, `tests/test_preportfolio_screen.py`.
 - **Not done:** no H005, no strategy outcomes, no Validation or Forward. V1, the registry and H001–H004 are unchanged.
 - **Strategy behavior changed:** No.
+
+## 2026-09-27 — STRATEGY_V2_HYPOTHESIS_005 specified (Research Protocol V2)
+
+- **Specification:** `research/strategy_v2_hypothesis_005.md`, "30Min relative-strength trend continuation", long-only. Registry entry added, tagged `research_protocol_v2`. The registry schema gained the approved V2 status list and a per-entry `protocol` field description; H001–H004 entries are unchanged.
+- **Protocol:** Research Protocol V2, frozen commit `565f7aa4b7e72a55780ecfe59ada805f166e4290`.
+- **Design frozen before any implementation or outcome.** The design review closed with zero open choices.
+  - **Signal:** first 30Min bar per symbol/session, decided 11:00 ET → scheduled close − 60 min, where the stock is up on the session, beats SPY over the identical window, and makes a new session closing high (strict, no magnitudes).
+  - **P2:** median 60-minute forward R at 0 bps on `matched_real_population`, at or above the 95th percentile vs 200 matched-random replicates.
+  - **P5:** mandatory on KNOWN, IEX vs SIP.
+- **Not done:**
+  - no H005 code, no signals, no Development outcomes viewed;
+  - no data downloaded;
+  - no Validation or Forward used.
+- **Status:** SPECIFIED_NOT_IMPLEMENTED.
+- **Strategy behavior changed:** No.
